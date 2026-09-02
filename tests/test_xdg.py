@@ -1,3 +1,7 @@
+import os
+
+import pytest
+
 from hexagon_kit.xdg import (
     KIT_DIRNAME,
     default_cache_dir,
@@ -44,6 +48,7 @@ def test_posix_fallback_is_dot_cache(monkeypatch, tmp_path):
     assert default_cache_dir() == tmp_path / ".cache" / "hexagon-kit" / "models"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="pathlib.WindowsPath cannot be constructed on POSIX CI")
 def test_windows_localappdata_without_xdg(monkeypatch, tmp_path):
     monkeypatch.delenv("HEXAGON_KIT_CACHE", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
@@ -52,6 +57,7 @@ def test_windows_localappdata_without_xdg(monkeypatch, tmp_path):
     assert default_cache_dir() == tmp_path / "Local" / "hexagon-kit" / "models"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="pathlib.WindowsPath cannot be constructed on POSIX CI")
 def test_windows_reuses_legacy_snapdragon_npu_dir(monkeypatch, tmp_path):
     monkeypatch.delenv("HEXAGON_KIT_CACHE", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
@@ -63,6 +69,7 @@ def test_windows_reuses_legacy_snapdragon_npu_dir(monkeypatch, tmp_path):
     assert default_cache_dir() == legacy
 
 
+@pytest.mark.skipif(os.name != "nt", reason="pathlib.WindowsPath cannot be constructed on POSIX CI")
 def test_modern_hexagon_kit_dir_wins_over_legacy(monkeypatch, tmp_path):
     monkeypatch.delenv("HEXAGON_KIT_CACHE", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
