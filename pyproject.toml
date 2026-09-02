@@ -13,11 +13,14 @@ authors = [{ name = "Matthew Hand" }]
 keywords = ["snapdragon", "hexagon", "npu", "copilot+", "onnxruntime", "qnn"]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3 :: Only",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Typing :: Typed",
 ]
@@ -25,7 +28,7 @@ dependencies = []
 
 [project.optional-dependencies]
 ort = ["onnxruntime>=1.20"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "build>=1.2"]
 
 [project.scripts]
 hexagon = "hexagon_kit.cli:main"
@@ -35,6 +38,9 @@ Homepage = "https://github.com/matthewhand/snapdragon-npu-hexagon-kit"
 Repository = "https://github.com/matthewhand/snapdragon-npu-hexagon-kit"
 Issues = "https://github.com/matthewhand/snapdragon-npu-hexagon-kit/issues"
 Changelog = "https://github.com/matthewhand/snapdragon-npu-hexagon-kit/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
