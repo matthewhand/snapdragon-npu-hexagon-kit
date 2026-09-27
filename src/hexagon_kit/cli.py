@@ -139,7 +139,10 @@ def build_parser() -> argparse.ArgumentParser:
     lst.set_defaults(func=cmd_models_list)
 
     dl = models_sub.add_parser("download", help="Download a catalog model into the shared cache")
-    dl.add_argument("model", help="Model id or slot (stt, tts, whisper_tiny_int8, kokoro_int8)")
+    dl.add_argument(
+        "model",
+        help="Model id or slot (stt, tts, llm, vision, whisper_tiny_int8, kokoro_int8, smollm2_135m_q4, ppocrv4_det_mobile)",
+    )
     dl.add_argument("--async", dest="async_job", action="store_true", help="Start a background download and print job JSON")
     dl.add_argument("--force", action="store_true", help="Bypass RAM/disk preflight (may thrash this 16 GB PC)")
     dl.set_defaults(func=cmd_models_download)

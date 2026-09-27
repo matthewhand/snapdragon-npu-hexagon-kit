@@ -20,7 +20,11 @@ def provider_chain(prefer: str | None = None) -> list[str]:
 
 
 def open_onnx(model_path: str | Path, prefer: str | None = None):
-    """Create an InferenceSession. Requires the optional `ort` extra."""
+    """Create an InferenceSession.
+
+    Needs an ORT wheel. The `[ort]` extra is CPU-oriented ``onnxruntime``.
+    Hexagon QNN needs the separate ``onnxruntime_qnn`` package.
+    """
     import onnxruntime as ort
 
     path = Path(model_path)

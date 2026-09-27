@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.1
+
+- EP honesty: `[ort]` extra is labeled CPU-only. Hexagon QNN needs the
+  separate `onnxruntime-qnn` package (`import onnxruntime_qnn`).
+- `probe_hardware()` / `hexagon hw` report `provider_kind`, `has_qnn`,
+  `has_directml`, `hexagon_qnn`, and `ort_package` so QNN, DirectML, and CPU
+  are distinguishable. Existing `preferred_provider` / `has_npu` fields are
+  unchanged for callers.
+- Builtin catalog slots `llm` (`smollm2_135m_q4`) and `vision`
+  (`ppocrv4_det_mobile`) with SHA-256, `ram_mb`, `disk_mb`, and
+  `expected_files`. Preflight gates downloads; `hexagon models list` shows
+  them. No 8 GB default models.
+
 ## 0.1.0
 
 First tagged library slice for first-generation Copilot+ PCs (16 GB RAM, Hexagon 45 TOPS).
@@ -17,4 +30,4 @@ First tagged library slice for first-generation Copilot+ PCs (16 GB RAM, Hexagon
 - CI builds an sdist/wheel after pytest so a missing `tests/` tree fails the job.
 - sdist includes CHANGELOG and `config.example.json`.
 
-Not in this release: PyPI upload, Hexagon QNN wheel, Gemma/LLM/vision catalog entries, a cross-app NPU daemon.
+Not in this release: PyPI upload, a bundled Hexagon QNN wheel, Gemma-class catalog defaults, a cross-app NPU daemon.

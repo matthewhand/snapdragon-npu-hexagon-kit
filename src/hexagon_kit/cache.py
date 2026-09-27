@@ -28,7 +28,7 @@ __all__ = [
 
 ProgressFn = Callable[[str, int, int], None]
 
-USER_AGENT = "snapdragon-npu-hexagon-kit/0.1 (Windows ARM64; Copilot+ PC)"
+USER_AGENT = "snapdragon-npu-hexagon-kit/0.1.1 (Windows ARM64; Copilot+ PC)"
 
 
 class ModelNotInstalled(FileNotFoundError):

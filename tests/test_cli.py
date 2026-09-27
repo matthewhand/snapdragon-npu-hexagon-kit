@@ -16,6 +16,9 @@ def test_hw_cli(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert "preferred_provider" in payload
     assert "is_snapdragon" in payload
+    assert payload["provider_kind"] in {"qnn", "directml", "cpu"}
+    assert payload["hexagon_qnn"] is False or payload["has_qnn"] is True
+    assert payload["ort_package"] in {"onnxruntime_qnn", "onnxruntime", "none"}
 
 
 def test_config_show_cli(capsys, monkeypatch, tmp_path):
@@ -38,7 +41,14 @@ def test_models_list_cli(capsys, monkeypatch, tmp_path):
     assert main(["models", "list"]) == 0
     rows = json.loads(capsys.readouterr().out)
     ids = {row["id"] for row in rows}
-    assert ids == {"whisper_tiny_int8", "kokoro_int8"}
+    slots = {row["slot"] for row in rows}
+    assert ids == {
+        "whisper_tiny_int8",
+        "kokoro_int8",
+        "smollm2_135m_q4",
+        "ppocrv4_det_mobile",
+    }
+    assert slots == {"stt", "tts", "llm", "vision"}
     assert all(row["installed"] is False for row in rows)
 
 
@@ -49,6 +59,18 @@ def test_preflight_cli(capsys, monkeypatch, tmp_path):
     assert payload["ramFit"] in {"fits", "tight", "unsafe"}
     assert "ok" in payload
     assert code in {0, 2}
+
+
+def test_preflight_cli_llm_and_vision(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    for slot in ("llm", "vision"):
+        code = main(["preflight", slot])
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ramFit"] in {"fits", "tight", "unsafe"}
+        assert "requiredRamMb" in payload
+        assert payload["requiredRamMb"] > 0
+        assert payload["requiredDiskMb"] > 0
+        assert code in {0, 2}
 
 
 def test_models_path_missing(capsys, monkeypatch, tmp_path):
