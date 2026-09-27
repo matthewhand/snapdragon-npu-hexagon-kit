@@ -333,3 +333,53 @@ def test_models_list_builtin_still_default(capsys, monkeypatch, tmp_path):
     origins = {row["id"]: row.get("origin") for row in rows}
     assert origins["whisper_tiny_int8"] == "github"
     assert origins["smollm2_135m_int8"] == "huggingface"
+
+
+def test_ui_snapshot_lists_installed_hub_models_as_cards(monkeypatch, tmp_path):
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    reset_jobs()
+    dest = tmp_path / "hub" / "whisper_tiny"
+    dest.mkdir(parents=True)
+    (dest / "COMPLETE").write_text("ok\n", encoding="utf-8")
+    (dest / "model.onnx").write_bytes(b"abc")
+    snap = ui_snapshot()
+    card = next(item for item in snap["models"] if item.get("source") == "hub")
+    assert card["id"] == "whisper_tiny"
+    assert card["slot"] == "stt"
+    assert card["chatCapable"] is False
+    assert card["status"] == "ready"
+    assert card["actions"] == ["delete"]
+    assert card["canDelete"] is True
+    assert card["installed"] is True
+    catalog = next(item for item in snap["models"] if item["id"] == "kokoro_int8")
+    assert catalog["source"] == "catalog"
+
+
+def test_start_hub_download_uses_shared_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    reset_jobs()
+    from hexagon_kit.hub import hub_model_dir
+    from hexagon_kit.status import get_job, start_hub_download
+
+    def fake_fetch(model_id, **kwargs):
+        if kwargs.get("on_phase"):
+            kwargs["on_phase"]("fetching_hub")
+        dest = hub_model_dir(model_id, tmp_path)
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "COMPLETE").write_text("ok\n", encoding="utf-8")
+        (dest / "model.onnx").write_bytes(b"onnx")
+        return dest
+
+    monkeypatch.setattr("hexagon_kit.status.fetch_hub_model", fake_fetch)
+    job = start_hub_download("whisper_tiny")
+    assert job["source"] == "hub"
+    assert job["id"] == "whisper_tiny"
+    deadline = __import__("time").time() + 5
+    current = job
+    while __import__("time").time() < deadline and current and current.get("state") not in {"ready", "failed"}:
+        __import__("time").sleep(0.02)
+        current = get_job("whisper_tiny")
+    assert current["state"] == "ready"
+    card = next(item for item in ui_snapshot()["models"] if item["id"] == "whisper_tiny")
+    assert card["source"] == "hub"
+    assert card["status"] == "ready"

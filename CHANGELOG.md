@@ -30,6 +30,27 @@ their meaning.
 - **Shared cache hygiene.** Interrupted downloads (Ctrl+C, cancel) remove
   their staging dir; dead-PID staging dirs are reaped under the slot lock.
   `peer_download()` reports another app's in-flight download.
+- **Shared download jobs.** Job records live in `<cache>/jobs/` under a
+  file lock. `ui_snapshot()` / `model_card()` / `download_jobs()` in any
+  process show the same progress. A job whose process has exited is marked
+  `failed` with `errorType: "ProcessExited"`.
+- **Progress callbacks and watch.** `start_download(..., on_progress, on_done)`
+  and `watch_jobs(interval)` / `poll_jobs()`. Job `phase` is one of
+  `starting`, `waiting_on_lock`, `resolving_hf`, `linking`, `downloading`,
+  `fetching_hub`, `verifying`.
+- **Lock wait.** A download blocked on another process's slot lock reports
+  `waiting_on_lock` and `lockHolder` (`pid`, `exe`) instead of a generic
+  error. The wait budget resets while that process's staging directory
+  grows. It fails with `LockWaitExceeded` only after a quiet budget
+  (~300s).
+- **Hub cards.** Installed Hub models, and Hub downloads in flight, are
+  cards on `ui_snapshot()["models"]` with `source: "hub"` and the same
+  fields. `start_hub_download(id)` uses the shared job records. Actions
+  are `fetch`, `cancel`, and `delete`.
+- **CLI downloads that outlive the command.** `hexagon models download
+  --async` starts a detached process and prints the job JSON. Blocking
+  downloads accept `--json-lines`. `hexagon jobs list|status|cancel`
+  reads the shared jobs.
 - **Cheaper snapshot.** `vendor_status()` / `hub_snapshot()` probe Hub
   packages with `find_spec` + metadata instead of importing them, so
   `ui_snapshot()` no longer loads the torch-heavy `qai_hub_models`.

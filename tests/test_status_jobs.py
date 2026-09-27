@@ -209,3 +209,152 @@ def test_peer_download_shows_on_card(cache, monkeypatch):
     assert card["actions"] == []
     assert card["peerDownload"]["pid"] == PEER_PID
     assert "another app" in card["statusLabel"]
+
+
+def _alive_for(peer: int):
+    def alive(pid: int) -> bool:
+        return pid == peer or pid == os.getpid()
+
+    return alive
+
+
+def test_persisted_job_is_visible_without_local_memory(cache, monkeypatch):
+    monkeypatch.setattr("hexagon_kit.jobs.pid_alive", _alive_for(PEER_PID))
+    monkeypatch.setattr("hexagon_kit.status.pid_alive", _alive_for(PEER_PID))
+    payload = {
+        "id": "kokoro_int8",
+        "slot": "tts",
+        "source": "catalog",
+        "role": "owner",
+        "state": "downloading",
+        "phase": "downloading",
+        "pct": 37,
+        "downloaded": 1000,
+        "total": 4000,
+        "currentFile": "voices-v1.0.bin",
+        "error": None,
+        "errorType": None,
+        "pid": PEER_PID,
+        "startedAt": time.time(),
+        "finishedAt": None,
+        "updatedAt": time.time(),
+    }
+    jobs = cache / "jobs"
+    jobs.mkdir()
+    (jobs / "kokoro_int8.json").write_text(__import__("json").dumps(payload), encoding="utf-8")
+    card = model_card("tts")
+    assert card["status"] == "downloading"
+    assert card["progressPct"] == 37
+    assert card["downloadedBytes"] == 1000
+    assert card["job"]["pid"] == PEER_PID
+    assert card["actions"] == ["cancel"]
+    snap = ui_snapshot()
+    assert snap["jobs"][0]["pct"] == 37
+
+
+def test_dead_owner_job_is_marked_failed(cache):
+    payload = {
+        "id": "kokoro_int8",
+        "slot": "tts",
+        "source": "catalog",
+        "role": "owner",
+        "state": "downloading",
+        "pct": 10,
+        "downloaded": 1,
+        "total": 10,
+        "pid": 999999,
+        "startedAt": time.time(),
+        "updatedAt": time.time(),
+    }
+    jobs = cache / "jobs"
+    jobs.mkdir()
+    (jobs / "kokoro_int8.json").write_text(__import__("json").dumps(payload), encoding="utf-8")
+    card = model_card("tts")
+    assert card["status"] == "failed"
+    assert card["errorType"] == "ProcessExited"
+    assert "exited" in card["error"]
+
+
+def test_progress_callback_and_watch(cache, monkeypatch):
+    from hexagon_kit.status import watch_jobs
+
+    seen: list[str] = []
+    finished: list[str] = []
+
+    def ok(artifact, staging, progress):
+        path = staging / artifact.filename
+        path.write_bytes(b"x")
+        if progress:
+            progress(artifact.filename, 4, 4)
+        return path
+
+    monkeypatch.setattr("hexagon_kit.cache._fetch_artifact", ok)
+    watcher = watch_jobs(0.05)
+    start_download(
+        "tts",
+        force=True,
+        on_progress=lambda job: seen.append(str(job.get("phase"))),
+        on_done=lambda job: finished.append(job["state"]),
+    )
+    first = next(watcher)
+    watcher.close()
+    assert any(job["id"] == "kokoro_int8" for job in first)
+    _wait_state("tts", {"ready"})
+    assert finished == ["ready"]
+    assert seen
+
+
+def test_lock_wait_is_distinct_until_the_budget_is_spent(cache, monkeypatch):
+    monkeypatch.setattr("hexagon_kit.cache.LOCK_WAIT_S", 0.35)
+
+    def fail_fetch(*_args, **_kwargs):
+        raise AssertionError("fetch should not start while the lock is held")
+
+    monkeypatch.setattr("hexagon_kit.cache._fetch_artifact", fail_fetch)
+    ready = threading.Event()
+
+    def hold():
+        from hexagon_kit.lock import FileLock
+
+        with FileLock(cache / "tts.lock"):
+            ready.set()
+            time.sleep(1.5)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert ready.wait(2)
+    start_download("tts", force=True)
+    waiting = _wait_state("tts", {"waiting_on_lock"})
+    assert waiting["lockHolder"]["pid"]
+    card = model_card("tts")
+    assert card["status"] == "waiting_on_lock"
+    assert card["error"] is None
+    assert "lock" in card["statusLabel"].lower()
+    failed = _wait_state("tts", {"failed"}, timeout=3)
+    assert failed["errorType"] == "LockWaitExceeded"
+    assert model_card("tts")["status"] == "failed"
+    holder.join(timeout=3)
+
+
+def test_cancel_flag_is_written_for_another_process(cache, monkeypatch):
+    monkeypatch.setattr("hexagon_kit.jobs.pid_alive", _alive_for(PEER_PID))
+    monkeypatch.setattr("hexagon_kit.status.pid_alive", _alive_for(PEER_PID))
+    payload = {
+        "id": "kokoro_int8",
+        "slot": "tts",
+        "role": "owner",
+        "state": "downloading",
+        "pct": 4,
+        "pid": PEER_PID,
+        "startedAt": time.time(),
+        "updatedAt": time.time(),
+    }
+    jobs = cache / "jobs"
+    jobs.mkdir()
+    path = jobs / "kokoro_int8.json"
+    path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+    result = cancel_download("tts")
+    assert result["cancelRequested"] is True
+    stored = __import__("json").loads(path.read_text(encoding="utf-8"))
+    assert stored["cancelRequested"] is True
+    assert stored["state"] == "downloading"

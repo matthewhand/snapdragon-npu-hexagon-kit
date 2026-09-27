@@ -229,8 +229,8 @@ field is removed or changes meaning. Ignore keys you do not know.
 | `hardware`, `storage`, `config`, `hub` | Probe (honesty fields), disk meter, config sources, Hub packages |
 | `pool` | `budgetMb`, `residentMb`, in-process `slots`, cross-process `peers` (leases, `isSelf`) |
 | `slots` | One row per slot: `slot`, `slotLabel`, `modality`, `chatCapable`, `modelId`, `installed`, `heldBy` |
-| `models` | Model cards (below) |
-| `jobs` | This process's download jobs (active and finished) |
+| `models` | Model cards (below). Catalog cards have `source: "catalog"`. Installed Hub models, and Hub downloads in progress, are cards with `source: "hub"` and the same fields. |
+| `jobs` | Download jobs for every app using this cache, active and finished. Records live in `<cache>/jobs/` |
 | `settings` | `settings_snapshot()` form schema (below) |
 
 ### Model card
@@ -242,16 +242,18 @@ snapshot's `models[]` uses the same shape.
 |---|---|
 | `id`, `slot`, `name`, `description` | Catalog pin |
 | `slotLabel`, `modality`, `chatCapable` | `modality`: `speech-to-text` / `text-to-speech` / `text-generation` / `ocr` / `other`. Only `chatCapable: true` (`llm`) may appear in a chat-engine picker. |
-| `status` | `ready` / `downloadable` / `downloading` / `failed` / `cancelled` |
-| `statusLabel` | Ready-to-show text: `Downloading 42%`, `Cancelling…`, `Download failed`, `Downloading in another app (pid N)` |
-| `progressPct` | 0–100. Aggregated across all artifacts; monotonic; 99 until publish |
-| `downloadedBytes`, `totalBytes` | This process's job only; `totalBytes` is an estimate until every artifact reports a length |
-| `error`, `errorType` | Set when `status == "failed"` (for example `ValueError` for a SHA mismatch) |
+| `status` | `ready` / `downloadable` / `downloading` / `waiting_on_lock` / `failed` / `cancelled` |
+| `statusLabel` | Ready-to-show text: `Downloading 42%`, `Cancelling…`, `Waiting on download lock (pid N)`, `Download failed`, `Downloading in another app (pid N)` |
+| `progressPct` | 0–100. Aggregated across all artifacts; monotonic; 99 until publish. A lock wait shows the other download's percentage when that job is on disk |
+| `downloadedBytes`, `totalBytes` | From the shared job. `totalBytes` is an estimate until every artifact reports a length |
+| `error`, `errorType` | Set when `status == "failed"`. A lock wait that made no progress for the stall budget (~300s, reset while the holder's staging directory grows) uses `errorType: "LockWaitExceeded"`. While the wait is still normal, `error` stays null and `status` is `waiting_on_lock` |
+| `lockHolder` | `{"pid", "exe"}` while `status` is `waiting_on_lock`, else null. This is the file-lock holder, not the lease in `heldBy` |
+| `source` | `catalog` or `hub` |
 | `actions` | Buttons to show: `download`, `cancel`, `delete`, or none |
 | `canDelete`, `deleteBlockedReason` | Delete is withheld while any process holds a lease on the slot |
 | `heldBy` | Lease holder (`pid`, `exe`, `ram_mb`, `model_id`, `acquired_at`, `isSelf`) or `null` |
 | `peerDownload` | `{pid, bytes, estimatedPct, stagingDir}` when another app is downloading this slot |
-| `job` | This process's job for the model, or `null` |
+| `job` | Shared job for the model, or `null`. `phase` is `starting`, `waiting_on_lock`, `resolving_hf`, `linking`, `downloading`, `fetching_hub`, or `verifying` |
 | `installed`, `path`, `sizeBytes` | Disk truth. Disk wins over a stale in-process job. |
 | `ramFit`, `ramFitLabel`, `diskOk`, `preflight` | Preflight guard (see above) |
 
@@ -260,14 +262,23 @@ snapshot's `models[]` uses the same shape.
 ```python
 from hexagon_kit import (
     DownloadInProgress, ModelInUse, cancel_download, delete_cached,
-    get_job, model_card, start_download,
+    get_job, model_card, poll_jobs, start_download, start_hub_download,
+    watch_jobs,
 )
 
-job = start_download("tts")          # returns at once; state "downloading" or "blocked"
+def show(job):
+    pass  # your Settings UI; callbacks run on the download thread
+
+job = start_download("tts", on_progress=show, on_done=show)
+# returns at once; state "downloading", "waiting_on_lock", or "blocked"
 if job["state"] == "blocked":
     show(job["preflight"])           # offer Force only if preflight.canForce
-# poll model_card("tts") / ui_snapshot() every ~500 ms while status == "downloading"
+# poll_jobs() / model_card("tts") / ui_snapshot() while status is active
+# or iterate watch_jobs(0.5), which yields lists of jobs that changed
 cancel_download("tts")               # cooperative; job -> "cancelling" -> "cancelled"
+
+# Hub ids use the same job shape. Card actions are "fetch" / "cancel" / "delete".
+start_hub_download("whisper_tiny", on_progress=show, on_done=show)
 
 card = model_card("tts")
 if card["canDelete"]:
@@ -276,11 +287,36 @@ else:
     show(card["deleteBlockedReason"])
 ```
 
-Jobs live in the calling process. Another app's download shows up as
-`peerDownload` with an estimated percentage and no `cancel` action.
-`cancel_download` takes effect at the next streamed chunk; the staging
-directory is removed. A Hugging Face hub-cache fill (when `HF_TOKEN` is
-set) has no chunk callbacks and finishes before the cancel is seen.
+Jobs are files under the shared cache (`jobs/<id>.json`), guarded by a lock.
+Any app's `ui_snapshot()` sees the same `pct`, `downloaded`, and `phase`.
+A process blocked on another app's slot lock keeps a waiter record and the
+card stays `waiting_on_lock` with `lockHolder` set. That card becomes
+`failed` with `LockWaitExceeded` only after the stall budget runs out
+(staging growth resets the budget). `cancel_download` on a job owned by
+another process sets `cancelRequested`; that process stops at its next
+progress callback.
+
+`cancel_download` takes effect at the next streamed chunk or lock-wait poll.
+The staging directory is removed. A Hugging Face hub-cache fill (when
+`HF_TOKEN` is set) reports progress as each file is linked and finishes the
+current file before a cancel is seen. `peerDownload` is still set when
+staging exists but no job file does.
+
+CLI (the download runs here; there is no local HTTP server):
+
+```powershell
+hexagon models download tts
+hexagon models download tts --json-lines
+hexagon models download tts --async
+hexagon jobs list
+hexagon jobs status tts
+hexagon jobs cancel tts
+```
+
+`--async` starts a detached process and prints the job JSON. The download
+keeps running after that command exits, and other apps see it through
+`ui_snapshot()`. It does not return while leaving a thread that dies with
+the process.
 
 ### Settings form
 

@@ -51,6 +51,11 @@ def test_app_integration_documents_ui_contract():
         "settings_snapshot",
         "save_settings",
         "SettingField",
+        "watch_jobs",
+        "waiting_on_lock",
+        "start_hub_download",
+        "LockWaitExceeded",
+        'source: "hub"',
     ):
         assert needle in text, needle
 

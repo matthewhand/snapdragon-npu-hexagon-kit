@@ -15,6 +15,7 @@ import shutil
 import urllib.error
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -517,13 +518,68 @@ def hub_info(model_id: str, cache_dir: Path | None = None) -> dict[str, Any]:
     }
 
 
-def _fetch_hf_repo(repo: str, cache_dir: Path | None = None) -> Path:
+def _hub_staging_bytes(key: str, cache_dir: Path | None, holder_pid: int | None) -> int | None:
+    root = hub_dir(cache_dir)
+    if not root.is_dir():
+        return None
+    prefix = f".{key}-staging-"
+    total = 0
+    found = False
+    for child in root.iterdir():
+        if not child.is_dir() or not child.name.startswith(prefix):
+            continue
+        try:
+            pid = int(child.name[len(prefix):])
+        except ValueError:
+            continue
+        if holder_pid is not None and pid != holder_pid:
+            continue
+        found = True
+        for item in child.rglob("*"):
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                continue
+    return total if found else None
+
+
+def _hub_filelock(
+    key: str,
+    cache_dir: Path | None,
+    on_wait: Callable[[dict[str, Any]], None] | None,
+) -> FileLock:
+    from .cache import LOCK_WAIT_S
+
+    path = hub_dir(cache_dir) / f"{key}.lock"
+
+    def activity() -> int | None:
+        holder = FileLock(path).read_holder()
+        pid = holder.get("pid")
+        try:
+            holder_pid = int(pid) if pid else None
+        except (TypeError, ValueError):
+            holder_pid = None
+        return _hub_staging_bytes(key, cache_dir, holder_pid)
+
+    return FileLock(path, timeout_s=LOCK_WAIT_S, on_wait=on_wait, activity=activity)
+
+
+def _fetch_hf_repo(
+    repo: str,
+    cache_dir: Path | None = None,
+    *,
+    on_phase: Callable[[str], None] | None = None,
+    on_lock_wait: Callable[[dict[str, Any]], None] | None = None,
+) -> Path:
     apply_hub_credentials()
     key = _cache_id(repo)
     dest = hub_model_dir(key, cache_dir)
-    lock = FileLock(hub_dir(cache_dir) / f"{key}.lock")
+    lock = _hub_filelock(key, cache_dir, on_lock_wait)
     with _DOWNLOAD_THREAD_LOCK:
         with lock:
+            if on_phase is not None:
+                on_phase("fetching_hub")
             if hub_is_installed(key, cache_dir):
                 return dest
             staging = hub_dir(cache_dir) / f".{key}-staging-{os.getpid()}"
@@ -541,6 +597,8 @@ def _fetch_hf_repo(repo: str, cache_dir: Path | None = None) -> Path:
                     with zipfile.ZipFile(archive) as zf:
                         zf.extractall(staging / "repo")
                     archive.unlink(missing_ok=True)
+                if on_phase is not None:
+                    on_phase("verifying")
                 _mark_complete(staging)
                 _publish_slot(staging, dest)
             except BaseException:
@@ -558,12 +616,14 @@ def fetch_hub_model(
     device: str | None = None,
     extract: bool = True,
     cache_dir: Path | None = None,
+    on_phase: Callable[[str], None] | None = None,
+    on_lock_wait: Callable[[dict[str, Any]], None] | None = None,
 ) -> Path:
     """Download a Hub asset into the shared XDG cache under ``hub/<id>/``."""
     apply_hub_credentials()
     raw = model_id.strip()
     if "/" in raw:
-        return _fetch_hf_repo(raw, cache_dir=cache_dir)
+        return _fetch_hf_repo(raw, cache_dir=cache_dir, on_phase=on_phase, on_lock_wait=on_lock_wait)
     backend = _cli()
     key = _cache_id(raw)
     dest = hub_model_dir(key, cache_dir)
@@ -571,9 +631,11 @@ def fetch_hub_model(
     precision = precision or DEFAULT_HUB_PRECISION
     if runtime.lower().startswith("qnn") and not chipset and not device:
         chipset = DEFAULT_QNN_CHIPSET
-    lock = FileLock(hub_dir(cache_dir) / f"{key}.lock")
+    lock = _hub_filelock(key, cache_dir, on_lock_wait)
     with _DOWNLOAD_THREAD_LOCK:
         with lock:
+            if on_phase is not None:
+                on_phase("fetching_hub")
             if hub_is_installed(key, cache_dir):
                 return dest
             staging = hub_dir(cache_dir) / f".{key}-staging-{os.getpid()}"
@@ -602,6 +664,8 @@ def fetch_hub_model(
                             shutil.copytree(result, target, dirs_exist_ok=True)
                         else:
                             shutil.copy2(result, target)
+                if on_phase is not None:
+                    on_phase("verifying")
                 _mark_complete(staging)
                 _publish_slot(staging, dest)
             except BaseException:

@@ -36,6 +36,7 @@ from .settings import (
     validate_settings,
     validate_values,
 )
+from .lock import LockWaitExceeded
 from .status import (
     SNAPSHOT_SCHEMA_VERSION,
     DownloadCancelled,
@@ -45,11 +46,14 @@ from .status import (
     download_jobs,
     get_job,
     model_card,
+    poll_jobs,
     slot_info,
     slots_summary,
     start_download,
+    start_hub_download,
     storage_report,
     ui_snapshot,
+    watch_jobs,
 )
 from .xdg import default_cache_dir, default_config_path, xdg_cache_home, xdg_config_home, xdg_data_home
 
@@ -57,6 +61,7 @@ __all__ = [
     "CATALOG",
     "DownloadCancelled",
     "DownloadInProgress",
+    "LockWaitExceeded",
     "SNAPSHOT_SCHEMA_VERSION",
     "KIT_SETTINGS",
     "SETTINGS_SCHEMA_VERSION",
@@ -70,6 +75,7 @@ __all__ = [
     "download_jobs",
     "get_job",
     "peer_download",
+    "poll_jobs",
     "slot_info",
     "slots_summary",
     "HardwareProbe",
@@ -118,10 +124,12 @@ __all__ = [
     "reset_process_pool",
     "resolve",
     "start_download",
+    "start_hub_download",
     "storage_report",
     "take_lease",
     "ui_snapshot",
     "vendor_status",
+    "watch_jobs",
     "model_card",
     "xdg_cache_home",
     "xdg_config_home",

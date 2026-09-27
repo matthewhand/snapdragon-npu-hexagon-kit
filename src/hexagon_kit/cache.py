@@ -39,6 +39,9 @@ COMPLETE_NAME = "COMPLETE"
 _FETCH_ATTEMPTS = 3
 _FETCH_TIMEOUT_S = 60
 _DOWNLOAD_THREAD_LOCK = threading.RLock()
+# Stall budget while another process holds the slot lock. Grows of that
+# process's staging directory reset the budget (see FileLock.activity).
+LOCK_WAIT_S = 300.0
 
 ProgressFn = Callable[[str, int, int], None]
 
@@ -60,9 +63,21 @@ def slot_dir(spec: ModelSpec, cache_dir: Path | None = None) -> Path:
     return root / spec.slot
 
 
-def _slot_lock(spec: ModelSpec, cache_dir: Path | None = None) -> FileLock:
+def _slot_lock(
+    spec: ModelSpec,
+    cache_dir: Path | None = None,
+    *,
+    timeout_s: float | None = None,
+    on_wait: Callable[..., None] | None = None,
+    activity: Callable[[], int | None] | None = None,
+) -> FileLock:
     root = cache_dir or default_cache_dir()
-    return FileLock(Path(root) / f"{spec.slot}.lock")
+    return FileLock(
+        Path(root) / f"{spec.slot}.lock",
+        timeout_s=LOCK_WAIT_S if timeout_s is None else timeout_s,
+        on_wait=on_wait,
+        activity=activity,
+    )
 
 
 def _files_present(dest: Path, spec: ModelSpec) -> bool:
@@ -158,6 +173,35 @@ def _reap_stale_staging(spec: ModelSpec, cache_dir: Path | None = None) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
+def _tree_bytes(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def staging_bytes(
+    spec: ModelSpec,
+    cache_dir: Path | None = None,
+    holder_pid: int | None = None,
+) -> int | None:
+    """Bytes in a staging dir, optionally only the lock holder's pid."""
+    matched = 0
+    found = False
+    for pid, path in _staging_dirs(spec, cache_dir):
+        if holder_pid is not None and pid != holder_pid:
+            continue
+        matched += _tree_bytes(path)
+        found = True
+    return matched if found else None
+
+
 def peer_download(model_id_or_slot: str, cache_dir: Path | None = None) -> dict | None:
     """
     Another live process is downloading this slot into the shared cache.
@@ -171,13 +215,7 @@ def peer_download(model_id_or_slot: str, cache_dir: Path | None = None) -> dict 
     for pid, path in _staging_dirs(spec, cache_dir):
         if pid == me or not pid_alive(pid):
             continue
-        size = 0
-        for item in path.rglob("*"):
-            try:
-                if item.is_file():
-                    size += item.stat().st_size
-            except OSError:
-                continue
+        size = _tree_bytes(path)
         expected = spec.disk_mb * 1024 * 1024
         pct = min(99, int(size * 100 / expected)) if expected > 0 else 0
         return {"pid": pid, "bytes": size, "estimatedPct": pct, "stagingDir": str(path)}
@@ -208,12 +246,36 @@ def download_model(
     progress: ProgressFn | None = None,
     *,
     force: bool = False,
+    on_phase: Callable[[str], None] | None = None,
+    on_lock_wait: Callable[[dict], None] | None = None,
+    lock_timeout_s: float | None = None,
 ) -> Path:
     spec = get_spec(model_id_or_slot)
     _require_preflight(spec.model_id, force=force)
     dest = slot_dir(spec, cache_dir)
+
+    def phase(name: str) -> None:
+        if on_phase is not None:
+            on_phase(name)
+
+    def activity() -> int | None:
+        holder = _slot_lock(spec, cache_dir).read_holder()
+        pid = holder.get("pid")
+        try:
+            holder_pid = int(pid) if pid else None
+        except (TypeError, ValueError):
+            holder_pid = None
+        return staging_bytes(spec, cache_dir, holder_pid)
+
     with _DOWNLOAD_THREAD_LOCK:
-        with _slot_lock(spec, cache_dir):
+        with _slot_lock(
+            spec,
+            cache_dir,
+            timeout_s=lock_timeout_s,
+            on_wait=on_lock_wait,
+            activity=activity,
+        ):
+            phase("downloading")
             if is_installed(spec.model_id, cache_dir):
                 return dest
             _reap_stale_staging(spec, cache_dir)
@@ -224,11 +286,16 @@ def download_model(
             fetch_dir = staging / "_dl"
             fetch_dir.mkdir()
             try:
-                used_hf = _try_hf_files(spec, staging)
-                if not used_hf:
+                phase("resolving_hf")
+                used_hf = _try_hf_files(spec, staging, progress)
+                if used_hf:
+                    phase("linking")
+                else:
+                    phase("downloading")
                     for artifact in spec.artifacts:
                         local = _fetch_artifact(artifact, fetch_dir, progress)
                         _place_artifact(artifact, local, staging, spec)
+                phase("verifying")
                 missing = [
                     name for name in spec.expected_files if not (staging / name).is_file()
                 ]
@@ -246,7 +313,7 @@ def download_model(
     return dest
 
 
-def _try_hf_files(spec: ModelSpec, staging: Path) -> bool:
+def _try_hf_files(spec: ModelSpec, staging: Path, progress: ProgressFn | None = None) -> bool:
     """If HF_TOKEN is set and the spec has mirrors, fill staging from the HF cache."""
     if not hf_token() or not spec.hf_files:
         return False
@@ -266,6 +333,9 @@ def _try_hf_files(spec: ModelSpec, staging: Path) -> bool:
                         f"HF SHA-256 mismatch for {item.local_name}: "
                         f"got {digest}, expected {expected_hash}"
                     )
+            if progress is not None:
+                size = dest.stat().st_size if dest.is_file() else 0
+                progress(item.local_name, size, size)
         return all((staging / name).is_file() for name in spec.expected_files)
     except Exception:
         for name in spec.expected_files:

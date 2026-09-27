@@ -1,10 +1,13 @@
-"""CLI: hexagon hw | status | preflight | config | models | hub."""
+"""CLI: hexagon hw | status | preflight | config | models | hub | jobs."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 from . import __version__
 from .cache import is_installed, resolve
@@ -24,7 +27,18 @@ from .hw import probe_hardware
 from .leases import ModelInUse
 from .preflight import PreflightBlocked, preflight
 from .settings import KIT_SETTINGS, SettingsError, save_settings, settings_snapshot
-from .status import delete_cached, model_card, start_download, ui_snapshot
+from .status import (
+    adopt_detached_pid,
+    cancel_download,
+    delete_cached,
+    download_jobs,
+    fail_detached_download,
+    get_job,
+    model_card,
+    run_download_foreground,
+    seed_detached_download,
+    ui_snapshot,
+)
 from .xdg import default_config_path
 
 _last_progress_name: list[str] = []
@@ -312,21 +326,123 @@ def cmd_hub_configure(args: argparse.Namespace) -> int:
     return 0
 
 
+def _child_env() -> dict[str, str]:
+    env = os.environ.copy()
+    pkg = Path(__file__).resolve().parent
+    src = pkg.parent
+    if pkg.name == "hexagon_kit" and src.name == "src":
+        current = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(src) + (os.pathsep + current if current else "")
+    return env
+
+
+def spawn_detached(argv: list[str]) -> int:
+    """Start ``argv`` in a new session so it keeps running after this process exits.
+
+    Returns the child pid. The child is not a daemon thread of this process.
+    """
+    kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+        "env": _child_env(),
+    }
+    if os.name == "nt":
+        detached = 0x00000008
+        new_group = 0x00000200
+        no_window = 0x08000000
+        kwargs["creationflags"] = detached | new_group | no_window
+    else:
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(argv, **kwargs)
+    return int(proc.pid)
+
+
+def _worker_argv(model_id: str, *, force: bool) -> list[str]:
+    argv = [sys.executable, "-m", "hexagon_kit", "models", "download", model_id, "--detach-worker"]
+    if force:
+        argv.append("--force")
+    return argv
+
+
+def cmd_jobs_list(_args: argparse.Namespace) -> int:
+    print(json.dumps(download_jobs(), indent=2))
+    return 0
+
+
+def cmd_jobs_status(args: argparse.Namespace) -> int:
+    job = get_job(args.model)
+    if job is None:
+        print(json.dumps({"id": args.model, "state": "idle"}, indent=2))
+        return 0
+    print(json.dumps(job, indent=2))
+    return 0
+
+
+def cmd_jobs_cancel(args: argparse.Namespace) -> int:
+    print(json.dumps(cancel_download(args.model), indent=2))
+    return 0
+
+
 def cmd_models_download(args: argparse.Namespace) -> int:
     spec = get_spec(args.model)
+    if args.detach_worker:
+        job = run_download_foreground(spec.model_id, force=args.force)
+        if job.get("state") == "blocked":
+            print(json.dumps(job, indent=2), file=sys.stderr)
+            return 2
+        if job.get("state") == "failed":
+            print(json.dumps(job, indent=2), file=sys.stderr)
+            return 1
+        return 0
     if args.async_job:
-        print(json.dumps(start_download(spec.model_id, force=args.force), indent=2))
+        if not args.force:
+            guard = preflight(spec.model_id)
+            if not guard.ok:
+                print(json.dumps(guard.to_dict(), indent=2), file=sys.stderr)
+                return 2
+        seeded = seed_detached_download(spec.model_id, force=args.force)
+        if seeded.get("pid") not in (None, os.getpid()) and seeded.get("state") in {
+            "downloading",
+            "cancelling",
+            "waiting_on_lock",
+        }:
+            print(json.dumps(seeded, indent=2))
+            return 0
+        try:
+            pid = spawn_detached(_worker_argv(spec.model_id, force=args.force))
+        except OSError as exc:
+            failed = fail_detached_download(
+                spec.model_id, f"Could not start detached download: {exc}"
+            )
+            print(json.dumps(failed, indent=2), file=sys.stderr)
+            return 1
+        job = adopt_detached_pid(spec.model_id, pid) or {**seeded, "pid": pid}
+        print(json.dumps(job, indent=2))
         return 0
     print(f"Downloading {spec.name} ({spec.model_id})...", file=sys.stderr)
     from .cache import download_model
 
+    def progress(name: str, downloaded: int, total: int) -> None:
+        if args.json_lines:
+            payload = {"file": name, "downloaded": downloaded, "total": total}
+            if total > 0:
+                payload["pct"] = int(downloaded * 100 / total)
+            print(json.dumps(payload), flush=True)
+            return
+        _progress(name, downloaded, total)
+
     try:
-        dest = download_model(spec.model_id, progress=_progress, force=args.force)
+        dest = download_model(spec.model_id, progress=progress, force=args.force)
     except PreflightBlocked as exc:
         print(json.dumps(exc.result.to_dict(), indent=2), file=sys.stderr)
         return 2
-    print(file=sys.stderr)
-    print(str(dest))
+    if args.json_lines:
+        print(json.dumps({"state": "ready", "path": str(dest)}), flush=True)
+    else:
+        print(file=sys.stderr)
+        print(str(dest))
     return 0
 
 
@@ -363,6 +479,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--text", action="store_true", help="Human-readable summary instead of JSON")
     status.set_defaults(func=cmd_status)
+
+    jobs = sub.add_parser("jobs", help="List, inspect, or cancel shared download jobs")
+    jobs_sub = jobs.add_subparsers(dest="jobs_cmd", required=True)
+    jobs_list = jobs_sub.add_parser("list", help="Shared download jobs as JSON")
+    jobs_list.set_defaults(func=cmd_jobs_list)
+    jobs_status = jobs_sub.add_parser("status", help="One download job as JSON")
+    jobs_status.add_argument("model", help="Model id or slot")
+    jobs_status.set_defaults(func=cmd_jobs_status)
+    jobs_cancel = jobs_sub.add_parser("cancel", help="Cancel an active download job")
+    jobs_cancel.add_argument("model", help="Model id or slot")
+    jobs_cancel.set_defaults(func=cmd_jobs_cancel)
 
     pf = sub.add_parser("preflight", help="RAM/disk guard before download or activate")
     pf.add_argument("model", help="Model id or slot")
@@ -466,7 +593,24 @@ def build_parser() -> argparse.ArgumentParser:
         "model",
         help="Model id or slot (stt, tts, llm, vision, whisper_tiny_int8, …)",
     )
-    dl.add_argument("--async", dest="async_job", action="store_true", help="Start a background download and print job JSON")
+    dl.add_argument(
+        "--async",
+        dest="async_job",
+        action="store_true",
+        help="Start a detached download and print the job JSON. The download keeps running after this command exits.",
+    )
+    dl.add_argument(
+        "--detach-worker",
+        dest="detach_worker",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    dl.add_argument(
+        "--json-lines",
+        dest="json_lines",
+        action="store_true",
+        help="Print one JSON object per progress update on stdout (blocking download)",
+    )
     dl.add_argument("--force", action="store_true", help="Bypass RAM/disk preflight (may thrash this 16 GB PC)")
     dl.set_defaults(func=cmd_models_download)
 
