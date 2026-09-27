@@ -225,10 +225,16 @@ hexagon config show
 ```powershell
 hexagon hw
 hexagon status
+hexagon status --text
 hexagon preflight tts
 hexagon config show
+hexagon config settings
+hexagon config set max_ram_mb 4096
+hexagon config unset max_ram_mb
 hexagon models cache
 hexagon models list
+hexagon models status
+hexagon models status llm --text
 hexagon models download whisper_tiny_int8
 hexagon models download kokoro_int8
 hexagon models download llm
@@ -254,7 +260,11 @@ hexagon hub fetch whisper_tiny --runtime onnx --precision float
   not installed (`hexagon models download …` first).
 - `hexagon status` is `ui_snapshot()` as JSON: hardware, live RAM, disk, catalog
   cards (`actions`, `ramFit` / `ramFitLabel`), pool, config sources. This kit
-  does not draw the Settings UI.
+  does not draw the Settings UI. `--text` prints a table for people.
+- `hexagon models status [model]` prints the same model cards (status,
+  progress, error, lease holder). `hexagon config settings | set | unset`
+  reads and validates the shared settings schema. Card and settings fields
+  are documented in [docs/APP_INTEGRATION.md](docs/APP_INTEGRATION.md).
 
 Live RAM is `GlobalMemoryStatusEx` on Windows (`total`, `available`, `load %`,
 `barLevel` green / orange / red) or `MemAvailable` on Linux.

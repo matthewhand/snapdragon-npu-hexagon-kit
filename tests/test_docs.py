@@ -36,6 +36,25 @@ def test_app_integration_guide_covers_consumer_contract():
     assert "docs/PUBLISH.md" in readme
 
 
+def test_app_integration_documents_ui_contract():
+    text = (ROOT / "docs" / "APP_INTEGRATION.md").read_text(encoding="utf-8")
+    for needle in (
+        "schemaVersion",
+        "statusLabel",
+        "progressPct",
+        "chatCapable",
+        "canDelete",
+        "heldBy",
+        "peerDownload",
+        "cancel_download",
+        "DownloadInProgress",
+        "settings_snapshot",
+        "save_settings",
+        "SettingField",
+    ):
+        assert needle in text, needle
+
+
 def test_install_notes_keep_ort_cpu_and_qnn_hexagon_honest():
     """Consumer install page (publish polish). T13 already owns APP_INTEGRATION."""
     text = (ROOT / "docs" / "INSTALL.md").read_text(encoding="utf-8")

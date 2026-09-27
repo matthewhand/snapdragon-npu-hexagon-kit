@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+App-facing UX surface. All schema changes are additive; existing keys keep
+their meaning.
+
+- **Reliable model cards.** `progressPct` aggregates across artifacts
+  (no more 0→100→0 on Kokoro), disk state wins over a stale in-process
+  job, failed jobs carry `error` + `errorType`. New card fields:
+  `slotLabel`, `modality`, `chatCapable` (only `llm` is a chat engine),
+  `canDelete`, `deleteBlockedReason`, `heldBy`, `peerDownload`, `job`,
+  `path`, `sizeBytes`, `downloadedBytes`, `totalBytes`.
+- **Lease-aware delete.** Cards omit `delete` while any process holds a
+  lease on the slot. `delete_cached` raises `DownloadInProgress` while this
+  process is still downloading.
+- **Cancel.** `cancel_download(slot)`; jobs go `cancelling` → `cancelled`
+  and staging is removed. `get_job()` / `download_jobs()` expose jobs.
+  Card `actions` shows `cancel` during an own download.
+- **Snapshot metadata.** `ui_snapshot()` adds `schemaVersion` (1),
+  `kitVersion`, `generatedAt`, `slots`, `jobs`, `settings`; `pool.peers`
+  rows add `isSelf`.
+- **Shared Settings schema.** `settings_snapshot()`, `validate_settings()`,
+  `save_settings()` (writes the shared XDG `config.json`, keeps
+  `models[]`), `SettingsError`, and a reusable `SettingField` /
+  `validate_values` descriptor for app-owned settings. JSON only.
+- **CLI.** `hexagon status --text`, `hexagon models status [model] [--text]`,
+  `hexagon config settings | set | unset`. Ctrl+C exits 130; `KeyError`
+  messages are no longer repr-quoted.
+- **Shared cache hygiene.** Interrupted downloads (Ctrl+C, cancel) remove
+  their staging dir; dead-PID staging dirs are reaped under the slot lock.
+  `peer_download()` reports another app's in-flight download.
+- **Cheaper snapshot.** `vendor_status()` / `hub_snapshot()` probe Hub
+  packages with `find_spec` + metadata instead of importing them, so
+  `ui_snapshot()` no longer loads the torch-heavy `qai_hub_models`.
+
 ## 0.3.0 — 2026-09-27
 
 Private SoT **publish candidate**. Not a PyPI upload. Public promote stays

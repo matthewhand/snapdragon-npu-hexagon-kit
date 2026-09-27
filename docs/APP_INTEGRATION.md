@@ -220,6 +220,96 @@ A second app that already holds the slot is blocked unless `force=True`.
 `ramFit` / `ramFitLabel`), pool peers, config sources. Bind that JSON.
 Do not draw kit widgets here.
 
+The schema is additive. `schemaVersion` (currently `1`) bumps only if a
+field is removed or changes meaning. Ignore keys you do not know.
+
+| Top-level key | What it holds |
+|---|---|
+| `schemaVersion`, `kitVersion`, `generatedAt` | Payload version, kit version, epoch seconds |
+| `hardware`, `storage`, `config`, `hub` | Probe (honesty fields), disk meter, config sources, Hub packages |
+| `pool` | `budgetMb`, `residentMb`, in-process `slots`, cross-process `peers` (leases, `isSelf`) |
+| `slots` | One row per slot: `slot`, `slotLabel`, `modality`, `chatCapable`, `modelId`, `installed`, `heldBy` |
+| `models` | Model cards (below) |
+| `jobs` | This process's download jobs (active and finished) |
+| `settings` | `settings_snapshot()` form schema (below) |
+
+### Model card
+
+`model_card(slot)` / `hexagon models status <slot>` returns one card; the
+snapshot's `models[]` uses the same shape.
+
+| Field | Meaning |
+|---|---|
+| `id`, `slot`, `name`, `description` | Catalog pin |
+| `slotLabel`, `modality`, `chatCapable` | `modality`: `speech-to-text` / `text-to-speech` / `text-generation` / `ocr` / `other`. Only `chatCapable: true` (`llm`) may appear in a chat-engine picker. |
+| `status` | `ready` / `downloadable` / `downloading` / `failed` / `cancelled` |
+| `statusLabel` | Ready-to-show text: `Downloading 42%`, `Cancelling…`, `Download failed`, `Downloading in another app (pid N)` |
+| `progressPct` | 0–100. Aggregated across all artifacts; monotonic; 99 until publish |
+| `downloadedBytes`, `totalBytes` | This process's job only; `totalBytes` is an estimate until every artifact reports a length |
+| `error`, `errorType` | Set when `status == "failed"` (for example `ValueError` for a SHA mismatch) |
+| `actions` | Buttons to show: `download`, `cancel`, `delete`, or none |
+| `canDelete`, `deleteBlockedReason` | Delete is withheld while any process holds a lease on the slot |
+| `heldBy` | Lease holder (`pid`, `exe`, `ram_mb`, `model_id`, `acquired_at`, `isSelf`) or `null` |
+| `peerDownload` | `{pid, bytes, estimatedPct, stagingDir}` when another app is downloading this slot |
+| `job` | This process's job for the model, or `null` |
+| `installed`, `path`, `sizeBytes` | Disk truth. Disk wins over a stale in-process job. |
+| `ramFit`, `ramFitLabel`, `diskOk`, `preflight` | Preflight guard (see above) |
+
+### Download, cancel, delete
+
+```python
+from hexagon_kit import (
+    DownloadInProgress, ModelInUse, cancel_download, delete_cached,
+    get_job, model_card, start_download,
+)
+
+job = start_download("tts")          # returns at once; state "downloading" or "blocked"
+if job["state"] == "blocked":
+    show(job["preflight"])           # offer Force only if preflight.canForce
+# poll model_card("tts") / ui_snapshot() every ~500 ms while status == "downloading"
+cancel_download("tts")               # cooperative; job -> "cancelling" -> "cancelled"
+
+card = model_card("tts")
+if card["canDelete"]:
+    delete_cached("tts")             # raises ModelInUse / DownloadInProgress on races
+else:
+    show(card["deleteBlockedReason"])
+```
+
+Jobs live in the calling process. Another app's download shows up as
+`peerDownload` with an estimated percentage and no `cancel` action.
+`cancel_download` takes effect at the next streamed chunk; the staging
+directory is removed. A Hugging Face hub-cache fill (when `HF_TOKEN` is
+set) has no chunk callbacks and finishes before the cancel is seen.
+
+### Settings form
+
+`settings_snapshot()` / `hexagon config settings` describes the shared kit
+settings: `cache_dir`, `max_ram_mb`, `preferred_provider`, `qnn_htp_dir`.
+Each field has `key`, `label`, `type` (`path` / `number` / `enum` / …),
+`help`, `default`, `options`, `minimum` / `maximum`, `unit`, `value`,
+`source` (`default` / `file` / `env:NAME`), and `locked`. Render a locked
+field read-only: an environment variable wins over the file.
+
+```python
+from hexagon_kit import SettingsError, save_settings, validate_settings
+
+errors = validate_settings({"max_ram_mb": form_value})   # {} when valid
+try:
+    snap = save_settings({"max_ram_mb": 4096, "preferred_provider": None})
+except SettingsError as exc:
+    show(exc.errors)                                    # {field_key: message}
+```
+
+`save_settings` writes the XDG `config.json` that **every** app on the
+machine reads, keeps `models[]`, and `None` removes a key. Choosing
+`QNNExecutionProvider` does not make Hexagon available; keep using
+`hardware.ep_kind` for badges.
+
+Apps can describe their own settings with `SettingField` and check input
+with `validate_values(fields, updates)`. The descriptor JSON is the same,
+so one form renderer handles kit and app fields.
+
 ---
 
 ## CI and hardware-less runners
