@@ -231,3 +231,84 @@ Tests must stay hardware-agnostic: probe helpers, catalog pins, and
 preflight shape run everywhere. Tests that need a live QNN EP use the
 `npu` pytest marker and **skip** when `QNNExecutionProvider` is absent.
 Do not fail Linux CI for missing HTP drivers.
+
+---
+
+## Lane-1 CI harness (SnipPilot / Persona / audience)
+
+Do **not** invent a fake `probe_hardware()` or a home-grown
+`get_available_providers()` stub in the app. Import the kit harness:
+
+```python
+from hexagon_kit.testing import (
+    CPU_PROVIDER,
+    LISTING_CPU,
+    LISTING_DIRECTML,
+    LISTING_QNN,   # QNN → DirectML → CPU
+    QNN_PROVIDER,
+    assert_cold_honesty,
+    classify_providers,
+    detect_hardware,
+    ensure_fixture,
+    hexagon_qnn,
+    install_fixture_catalog,
+    stub_ensure_resolve,
+)
+```
+
+`hexagon_kit.testing` is part of the installed package. T5 honesty fields
+stay stable; `hexagon_qnn(probe)` is the shared boolean for “may paint
+Hexagon”. CPU / `[ort]` is never Hexagon.
+
+### Mock ORT listings and classify / detect
+
+```python
+def test_prefer_qnn_without_listing_stays_cpu():
+    probe = detect_hardware(LISTING_CPU, prefer=QNN_PROVIDER)
+    assert probe.ep_kind == "cpu"
+    assert hexagon_qnn(probe) is False
+    assert_cold_honesty(probe)
+
+def test_listed_qnn_is_hexagon():
+    probe = detect_hardware(LISTING_QNN)
+    assert hexagon_qnn(probe) is True
+
+def test_classify_order():
+    assert classify_providers(LISTING_QNN).ep_kind == "qnn"
+    assert classify_providers(LISTING_DIRECTML).ep_kind == "directml"
+    assert classify_providers(LISTING_CPU).ep_kind == "cpu"
+```
+
+`detect_hardware` patches the kit detect path (`probe_hardware`).
+`classify_providers` is the kit classify path (`choose_execution_provider`).
+Neither needs Hexagon hardware.
+
+### Tiny fixture catalog (no multi-GB weights)
+
+Linux CI must not pull Whisper / Kokoro / SmolLM / RapidOCR. Install the
+Lane-1 fixtures, then `ensure_model` / `resolve` stay offline (`file://`
+bytes):
+
+```python
+def test_snip_pilot_vision_offline(tmp_path, monkeypatch):
+    install_fixture_catalog(tmp_path, monkeypatch=monkeypatch)
+    vision = ensure_fixture("vision", tmp_path)   # det + rec names, ~bytes
+    detect = ensure_fixture("detect", tmp_path)
+    classify = ensure_fixture("classify", tmp_path)
+    # Persona / audience: same helper for stt / tts / llm.
+```
+
+If the app only needs a path (no fetch path), stub:
+
+```python
+from hexagon_kit import resolve
+
+def test_persona_resolve_stub(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    path = stub_ensure_resolve(tmp_path, "stt")
+    assert path == resolve("stt")
+```
+
+Use `classify` / `detect` slots for app-specific heads. Use builtin slot
+names (`vision`, `llm`, …) when the app already calls `ensure_model("vision")`.
+Both are tiny; both are offline.

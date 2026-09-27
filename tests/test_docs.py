@@ -23,6 +23,11 @@ def test_app_integration_guide_covers_consumer_contract():
         "rapidocr_ppocrv4_mobile",
         "Never advertise",
         "onnxruntime_qnn",
+        "hexagon_kit.testing",
+        "hexagon_qnn",
+        "Lane-1",
+        "SnipPilot",
+        "install_fixture_catalog",
     ):
         assert needle in text, needle
     readme = (ROOT / "README.md").read_text(encoding="utf-8")

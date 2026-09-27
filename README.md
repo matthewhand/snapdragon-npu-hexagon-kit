@@ -22,7 +22,9 @@ The package is **not on PyPI**. Install from this tree.
 **Consumer apps:** follow [docs/APP_INTEGRATION.md](docs/APP_INTEGRATION.md) —
 depend on `hexagon_kit`, call `probe_hardware()` / EP honesty fields,
 `ensure_model` / `preflight` for slots `llm` and `vision`, and **never
-advertise Hexagon/QNN** unless `QNNExecutionProvider` is listed.
+advertise Hexagon/QNN** unless `QNNExecutionProvider` is listed. Lane-1
+CI: import `hexagon_kit.testing` (do not invent a fake EP probe; fixture
+catalog stays offline).
 
 TODO: publish `snapdragon-npu-hexagon-kit` to PyPI (`import hexagon_kit`, CLI `hexagon`). Do not upload until a PyPI token is available. GitHub Actions CI runs CPython 3.12/3.13 on `ubuntu-latest`; that is not a Hexagon box. NPU-marked tests skip when QNN is absent.
 

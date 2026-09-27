@@ -18,6 +18,13 @@
   advertise Hexagon/QNN without `QNNExecutionProvider`. Private SoT
   GitHub Actions runs pytest on PR/push to `main` (Linux; `npu` tests
   skip without QNN). Public API names stay stable.
+- **T19 — Lane-1 CI harness.** Importable `hexagon_kit.testing` mocks
+  ORT listings and kit classify/detect (QNN → DirectML → CPU) so
+  SnipPilot / Persona / audience do not invent fake EP probes. Cold
+  honesty: CPU / `[ort]` never paints Hexagon (`hexagon_qnn` is false
+  unless QNN is listed). Tiny fixture catalog + `ensure_fixture` /
+  `stub_ensure_resolve` keep Linux CI offline (no multi-GB weights).
+  T5 honesty fields unchanged.
 
 ## 0.2.0
 

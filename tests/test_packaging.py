@@ -43,3 +43,8 @@ def test_readme_and_license_ship_with_the_tree():
     assert "docs" in manifest
     assert "APP_INTEGRATION" in readme or "docs/APP_INTEGRATION.md" in readme
     assert "never" in readme.lower() and "QNNExecutionProvider" in readme
+    assert "hexagon_kit.testing" in readme or "Lane-1" in readme
+    import hexagon_kit.testing as harness
+
+    assert callable(harness.detect_hardware)
+    assert callable(harness.hexagon_qnn)
