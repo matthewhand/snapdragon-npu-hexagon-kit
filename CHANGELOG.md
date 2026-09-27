@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **T5 — EP honesty.** `[ort]` stays CPU-only (`onnxruntime>=1.20`). Hexagon
+  QNN is a different extra/package: `[qnn]` → `onnxruntime_qnn`. Docs and
+  `hexagon hw` / `probe_hardware()` distinguish QNN vs DirectML vs CPU
+  (`ep_kind`, `ort_package`, `qnn_package`) without changing existing
+  caller fields.
+
 ## 0.2.0
 
 Cross-process sharing for four Copilot+ apps on one 16 GB machine.

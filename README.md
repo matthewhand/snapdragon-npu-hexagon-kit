@@ -55,15 +55,22 @@ pip install -e ".[dev]"    # pytest
 The `hexagon` script is on PATH after the editable install. Equivalent:
 `python -m hexagon_kit`.
 
-Optional ONNX Runtime extra:
+Optional ONNX Runtime extras — **these are different packages**:
+
+| Extra | Installs | What `hexagon hw` can list |
+|---|---|---|
+| `[ort]` | upstream `onnxruntime>=1.20` | **CPU-only** on most wheels (`CPUExecutionProvider`). Not Hexagon QNN. |
+| `[qnn]` | `onnxruntime_qnn` | `QNNExecutionProvider` on Windows ARM64 Copilot+ with HTP drivers. |
 
 ```powershell
-pip install -e ".[ort]"
+pip install -e ".[ort]"    # CPU-oriented. Does not equal Qualcomm Hexagon QNN.
+pip install -e ".[qnn]"    # Hexagon QNN EP. Separate package from [ort].
 ```
 
-That extra is upstream `onnxruntime>=1.20`. On many machines that wheel is
-CPU-only. It is **not** Qualcomm’s QNN build. Hexagon listing needs
-`onnxruntime_qnn` (a different package); this extra does not install it.
+`[ort]` never installs `onnxruntime_qnn`. If ORT reports only
+`CPUExecutionProvider`, that is the CPU extra, not a silent Hexagon path.
+DirectML (`DmlExecutionProvider`, typically `onnxruntime-directml`) is a
+third listing — Adreno GPU, not QNN HTP.
 
 **Hub is not required.** Default STT/TTS downloads are public GitHub Releases
 (no Qualcomm account, no Hugging Face login):
@@ -101,7 +108,21 @@ GitHub. A Qualcomm
 Workbench token is **not** required for builtin GitHub STT/TTS or public Hub
 S3 fetch. Kokoro is not a Hub model, so builtin `tts` stays GitHub.
 Without any ORT package, `probe_hardware().providers` is
-`["CPUExecutionProvider"]`.
+`["CPUExecutionProvider"]` and `ep_kind` is `cpu`.
+
+`probe_hardware()` / `hexagon hw` distinguish the three EPs from what ORT
+actually lists (not from “an ORT wheel is installed”):
+
+| `ep_kind` | Provider | Means |
+|---|---|---|
+| `qnn` | `QNNExecutionProvider` | Hexagon HTP. Needs `onnxruntime_qnn`. |
+| `directml` | `DmlExecutionProvider` | DirectML. Not QNN. |
+| `cpu` | `CPUExecutionProvider` | CPU (`[ort]` or no ORT). Not Hexagon. |
+
+`ort_package` is `onnxruntime` / `onnxruntime-directml` / `onnxruntime_qnn`.
+`qnn_package` is true only when `import onnxruntime_qnn` works. Existing
+fields (`providers`, `preferred_provider`, `has_npu`) stay stable for
+callers.
 
 Provider preference, when ORT reports them: **QNN → DirectML → CPU**. HTP
 discovery is a glob of `qcnspmcdm*/HTP` plus `HEXAGON_QNN_HTP_DIR` / config —
@@ -256,8 +277,10 @@ pool.release("stt")
 `ensure_model(..., force=True)` and `pool.acquire(..., force=True)` are the
 same explicit bypass as `hexagon models download --force`.
 
-`open_onnx(path)` (optional `ort` extra) is `onnxruntime.InferenceSession` with
-`provider_chain()`. It is not a sherpa Whisper or Kokoro wrapper.
+`open_onnx(path)` uses `onnxruntime.InferenceSession` with `provider_chain()`.
+The optional `[ort]` extra is CPU-oriented; Hexagon QNN needs
+`onnxruntime_qnn` so the chain can include `QNNExecutionProvider`. It is not
+a sherpa Whisper or Kokoro wrapper.
 
 Apps should call `resolve("stt")` / `resolve("tts")` instead of hardcoding
 `C:\tmp\npu_pipeline\models`.

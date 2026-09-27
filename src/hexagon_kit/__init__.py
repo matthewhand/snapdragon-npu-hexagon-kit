@@ -4,7 +4,14 @@ from .cache import ModelNotInstalled, ensure_model, is_installed, resolve
 from .leases import Lease, ModelInUse, holder_for, list_leases, take_lease, drop_lease
 from .catalog import CATALOG, ModelSpec
 from .config import KitConfig, active, get_spec, list_specs, load_config, reset_config
-from .hw import HardwareProbe, MemoryStatus, probe_hardware, read_memory_status
+from .hw import (
+    HardwareProbe,
+    MemoryStatus,
+    ProviderChoice,
+    choose_execution_provider,
+    probe_hardware,
+    read_memory_status,
+)
 from .preflight import PreflightBlocked, PreflightResult, preflight
 from .runtime import ModelPool, PoolBudgetExceeded, process_pool, reset_process_pool
 from .session import open_onnx, provider_chain
@@ -26,6 +33,7 @@ __all__ = [
     "CATALOG",
     "HardwareProbe",
     "HubUnavailable",
+    "ProviderChoice",
     "KitConfig",
     "Lease",
     "MemoryStatus",
@@ -37,6 +45,7 @@ __all__ = [
     "ModelSpec",
     "PoolBudgetExceeded",
     "active",
+    "choose_execution_provider",
     "credentials_status",
     "delete_cached",
     "default_cache_dir",
