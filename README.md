@@ -55,21 +55,41 @@ pip install -e ".[dev]"    # pytest
 The `hexagon` script is on PATH after the editable install. Equivalent:
 `python -m hexagon_kit`.
 
-Optional ONNX Runtime extra:
+### ONNX Runtime extras (EP honesty)
+
+`[ort]` is **CPU-only**. It installs upstream `onnxruntime>=1.20`. On many
+machines that wheel lists only `CPUExecutionProvider`. Installing it does
+**not** mean Qualcomm Hexagon QNN is available.
 
 ```powershell
-pip install -e ".[ort]"
+pip install -e ".[ort]"    # CPU-oriented onnxruntime — not Hexagon QNN
 ```
 
-That extra is upstream `onnxruntime>=1.20`. On many machines that wheel is
-CPU-only. It is **not** Qualcomm’s QNN build. Hexagon listing needs
-`onnxruntime_qnn` (a different package); this extra does not install it.
-Without any ORT package, `probe_hardware().providers` is
-`["CPUExecutionProvider"]`.
+True Hexagon listing needs Qualcomm’s **separate** package
+`onnxruntime-qnn` (import name `onnxruntime_qnn`). That wheel is not an extra
+here because it is Windows ARM64 / Snapdragon-specific and is not the same
+package as `[ort]`.
 
-Provider preference, when ORT reports them: **QNN → DirectML → CPU**. HTP
-discovery is a glob of `qcnspmcdm*/HTP` plus `HEXAGON_QNN_HTP_DIR` / config —
-not a machine-specific DriverStore INF hash.
+```powershell
+# On the Copilot+ PC (Windows ARM64), not via [ort]:
+pip install onnxruntime-qnn
+```
+
+`hexagon hw` / `probe_hardware()` then prefer **QNN → DirectML → CPU** and
+report `provider_kind`, `has_qnn`, `has_directml`, `hexagon_qnn`, and
+`ort_package` so a CPU-only `[ort]` install is never shown as Hexagon QNN.
+
+| Install | Typical `ort_package` | `hexagon_qnn` |
+|---|---|---|
+| no ORT | `none` | false |
+| `pip install -e ".[ort]"` | `onnxruntime` | false unless a QNN EP is actually listed |
+| `pip install onnxruntime-qnn` | `onnxruntime_qnn` | true when `QNNExecutionProvider` is listed |
+
+Without any ORT package, `probe_hardware().providers` is
+`["CPUExecutionProvider"]` and `provider_kind` is `cpu`.
+
+HTP discovery is a glob of `qcnspmcdm*/HTP` plus `HEXAGON_QNN_HTP_DIR` /
+config — not a machine-specific DriverStore INF hash.
 
 ---
 
@@ -155,8 +175,12 @@ hexagon models cache
 hexagon models list
 hexagon models download whisper_tiny_int8
 hexagon models download kokoro_int8
+hexagon models download smollm2_135m_q4
+hexagon models download ppocrv4_det_mobile
 hexagon models path stt
 hexagon models path tts
+hexagon models path llm
+hexagon models path vision
 hexagon models delete whisper_tiny_int8
 ```
 
@@ -210,8 +234,9 @@ same explicit bypass as `hexagon models download --force`.
 `open_onnx(path)` (optional `ort` extra) is `onnxruntime.InferenceSession` with
 `provider_chain()`. It is not a sherpa Whisper or Kokoro wrapper.
 
-Apps should call `resolve("stt")` / `resolve("tts")` instead of hardcoding
-`C:\tmp\npu_pipeline\models`.
+Apps should call `resolve("stt")` / `resolve("tts")` / `resolve("llm")` /
+`resolve("vision")` instead of hardcoding `C:\tmp\npu_pipeline\models` or
+vendoring a private URL list. The kit owns the catalog.
 
 ---
 
@@ -234,8 +259,8 @@ Apps should call `resolve("stt")` / `resolve("tts")` instead of hardcoding
 `resolve` does not.
 
 A 4 GB LLM added via config overlay is refused on a 16 GB box with ~2 GB free
-unless the caller passes `force=True`. The builtin catalog does not include
-Gemma / LLM / vision.
+unless the caller passes `force=True`. Builtin `llm` / `vision` slots are
+SmolLM-class and a mobile OCR detector — not 8 GB defaults.
 
 ---
 
@@ -260,10 +285,13 @@ SnapDrago.
 |---|---|---|
 | `stt` | `whisper_tiny_int8` | sherpa-onnx Whisper Tiny EN INT8 (encoder + decoder + tokens), unpacked from the upstream `.tar.bz2` |
 | `tts` | `kokoro_int8` | `kokoro-v1.0.int8.onnx` + `voices-v1.0.bin` |
+| `llm` | `smollm2_135m_q4` | SmolLM2 135M Instruct Q4 ONNX + `tokenizer.json` (commit-pinned, ~176 MB) |
+| `vision` | `ppocrv4_det_mobile` | RapidOCR PP-OCRv4 mobile text detector ONNX (~5 MB) |
 
-Each entry has `slot`, `ram_mb`, `disk_mb`, and `expected_files`. Preflight and
-`ui_snapshot` use those fields. Add further models through `models[]` in config
-(or a future catalog slice) when a second app actually loads the same files.
+Each entry has `slot`, `ram_mb`, `disk_mb`, SHA-256, and `expected_files`.
+Preflight gates downloads; `hexagon models list` shows every slot. Add further
+models through `models[]` in config when a second app actually loads the same
+files. Do not vendor private URL lists in Persona / SnapDrago / npu_pipeline.
 
 ---
 

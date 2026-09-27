@@ -99,6 +99,33 @@ def test_suggests_lighter_same_slot(monkeypatch, tmp_path):
         reset_config()
 
 
+def test_preflight_llm_and_vision_shape(monkeypatch, tmp_path):
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    memory = MemoryStatus(
+        total_bytes=int(16 * 1024**3),
+        available_bytes=int(8 * 1024**3),
+        load_pct=50,
+    )
+    llm = preflight("llm", memory=memory)
+    vision = preflight("vision", memory=memory)
+    assert llm.required_ram_mb == 400
+    assert vision.required_ram_mb == 80
+    assert llm.required_disk_mb > 0
+    assert vision.required_disk_mb > 0
+    assert llm.ok is True
+    assert vision.ok is True
+
+    tight = MemoryStatus(
+        total_bytes=int(16 * 1024**3),
+        available_bytes=int(200 * 1024**2),
+        load_pct=95,
+    )
+    blocked = preflight("llm", memory=tight)
+    assert blocked.ok is False
+    assert blocked.can_force is True
+    assert blocked.ram_fit == "unsafe"
+
+
 def test_download_model_blocks_without_force(monkeypatch, tmp_path):
     monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
     reset_config()

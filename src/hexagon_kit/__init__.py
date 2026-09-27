@@ -3,7 +3,14 @@
 from .cache import ModelNotInstalled, ensure_model, is_installed, resolve
 from .catalog import CATALOG, ModelSpec
 from .config import KitConfig, active, get_spec, list_specs, load_config, reset_config
-from .hw import HardwareProbe, MemoryStatus, probe_hardware, read_memory_status
+from .hw import (
+    HardwareProbe,
+    MemoryStatus,
+    classify_providers,
+    detect_ort_package,
+    probe_hardware,
+    read_memory_status,
+)
 from .preflight import PreflightBlocked, PreflightResult, preflight
 from .runtime import ModelPool, PoolBudgetExceeded, process_pool, reset_process_pool
 from .session import open_onnx, provider_chain
@@ -22,7 +29,9 @@ __all__ = [
     "ModelSpec",
     "PoolBudgetExceeded",
     "active",
+    "classify_providers",
     "delete_cached",
+    "detect_ort_package",
     "default_cache_dir",
     "default_config_path",
     "ensure_model",
@@ -48,4 +57,4 @@ __all__ = [
     "xdg_data_home",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

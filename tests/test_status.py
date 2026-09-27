@@ -11,8 +11,14 @@ def test_ui_snapshot_shape(monkeypatch, tmp_path):
     assert "pool" in snap
     assert "config" in snap
     ids = {card["id"] for card in snap["models"]}
+    slots = {card["slot"] for card in snap["models"]}
     assert "whisper_tiny_int8" in ids
     assert "kokoro_int8" in ids
+    assert "smollm2_135m_q4" in ids
+    assert "ppocrv4_det_mobile" in ids
+    assert slots == {"stt", "tts", "llm", "vision"}
+    assert "provider_kind" in snap["hardware"]
+    assert "hexagon_qnn" in snap["hardware"]
     whisper = next(c for c in snap["models"] if c["id"] == "whisper_tiny_int8")
     assert whisper["installed"] is False
     assert "download" in whisper["actions"]

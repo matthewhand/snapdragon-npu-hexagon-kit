@@ -7,6 +7,10 @@ import platform
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+QNN_EP = "QNNExecutionProvider"
+DML_EP = "DmlExecutionProvider"
+CPU_EP = "CPUExecutionProvider"
+
 
 @dataclass
 class MemoryStatus:
@@ -60,13 +64,19 @@ class HardwareProbe:
     is_snapdragon: bool
     is_windows_arm64: bool
     providers: list[str] = field(default_factory=list)
-    preferred_provider: str = "CPUExecutionProvider"
+    preferred_provider: str = CPU_EP
     provider_label: str = "CPU"
     has_npu: bool = False
     npu_tops: int | None = None
     qnn_htp_dir: str | None = None
     notes: str = ""
     memory: MemoryStatus | None = None
+    # T5: distinguish QNN vs DirectML vs CPU. Additive — existing callers keep working.
+    provider_kind: str = "cpu"  # qnn | directml | cpu
+    has_qnn: bool = False
+    has_directml: bool = False
+    hexagon_qnn: bool = False
+    ort_package: str = "none"  # onnxruntime_qnn | onnxruntime | none
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -205,6 +215,67 @@ def _onnx_providers() -> list[str]:
         return []
 
 
+def detect_ort_package() -> str:
+    """Name the installed ORT wheel. `[ort]` is CPU-oriented `onnxruntime`."""
+    try:
+        import onnxruntime_qnn  # noqa: F401
+    except Exception:
+        pass
+    else:
+        return "onnxruntime_qnn"
+    try:
+        import onnxruntime  # noqa: F401
+    except Exception:
+        return "none"
+    return "onnxruntime"
+
+
+def classify_providers(
+    providers: list[str] | tuple[str, ...],
+    *,
+    is_arm64: bool = False,
+    is_snapdragon: bool = False,
+) -> tuple[str, str, str]:
+    """
+    Classify listed ORT execution providers.
+
+    Returns (preferred, label, kind) where kind is ``qnn``, ``directml``, or ``cpu``.
+    QNN is the only listing that means Qualcomm Hexagon HTP. DirectML is a
+    separate GPU/NPU path. CPU — including the `[ort]` extra's upstream
+    ``onnxruntime`` wheel — is never Hexagon QNN.
+    """
+    names = list(providers)
+    if QNN_EP in names:
+        return QNN_EP, "Hexagon NPU (QNN HTP)", "qnn"
+    if DML_EP in names:
+        label = "DirectML (Adreno / Hexagon)" if is_snapdragon else "DirectML"
+        return DML_EP, label, "directml"
+    label = "ARM NEON CPU" if is_arm64 else "CPU"
+    return CPU_EP, label, "cpu"
+
+
+def _ort_honesty_note(kind: str, ort_package: str, providers: list[str]) -> str | None:
+    if QNN_EP in providers:
+        return None
+    if ort_package == "onnxruntime_qnn":
+        return (
+            "onnxruntime_qnn is installed but QNNExecutionProvider is not listed. "
+            "Check HEXAGON_QNN_HTP_DIR / qnn_htp_dir and the Qualcomm HTP driver."
+        )
+    if ort_package == "onnxruntime":
+        return (
+            "Installed onnxruntime is the CPU-oriented wheel ([ort] extra). "
+            "That is not Qualcomm Hexagon QNN. Install the separate "
+            "onnxruntime-qnn package (import onnxruntime_qnn) for QNNExecutionProvider."
+        )
+    if kind == "cpu":
+        return (
+            "No ONNX Runtime installed. The [ort] extra is CPU-only onnxruntime; "
+            "Hexagon listing needs the separate onnxruntime_qnn package."
+        )
+    return None
+
+
 def _try_register_qnn(htp_dir: Path | None) -> None:
     try:
         import onnxruntime as ort
@@ -244,26 +315,24 @@ def probe_hardware() -> HardwareProbe:
         pass
     _try_register_qnn(htp_dir)
     providers = _onnx_providers()
-
-    if "QNNExecutionProvider" in providers:
-        preferred = "QNNExecutionProvider"
-        label = "Hexagon NPU (QNN HTP)"
-        has_npu = True
-    elif "DmlExecutionProvider" in providers:
-        preferred = "DmlExecutionProvider"
-        label = "DirectML (Adreno / Hexagon)" if is_snapdragon else "DirectML"
-        has_npu = is_snapdragon
-    else:
-        preferred = "CPUExecutionProvider"
-        label = "ARM NEON CPU" if is_arm64 else "CPU"
-        has_npu = False
+    listed = providers or [CPU_EP]
+    preferred, label, kind = classify_providers(
+        listed,
+        is_arm64=is_arm64,
+        is_snapdragon=is_snapdragon,
+    )
+    has_qnn = QNN_EP in listed
+    has_directml = DML_EP in listed
+    # Existing callers treat Snapdragon + DirectML as "has NPU". Keep that;
+    # hexagon_qnn is the honest Hexagon HTP bit (QNN EP only).
+    has_npu = has_qnn or (has_directml and is_snapdragon)
 
     if prefer_override:
         preferred = prefer_override
         labels = {
-            "QNNExecutionProvider": "Hexagon NPU (QNN HTP)",
-            "DmlExecutionProvider": "DirectML (Adreno / Hexagon)",
-            "CPUExecutionProvider": "ARM NEON CPU" if is_arm64 else "CPU",
+            QNN_EP: "Hexagon NPU (QNN HTP)",
+            DML_EP: "DirectML (Adreno / Hexagon)",
+            CPU_EP: "ARM NEON CPU" if is_arm64 else "CPU",
         }
         label = labels.get(prefer_override, prefer_override)
 
@@ -278,6 +347,10 @@ def probe_hardware() -> HardwareProbe:
         notes.append(
             f"Memory load {memory.load_pct}% ({memory.available_gb} GB free of {memory.total_gb} GB)."
         )
+    ort_package = detect_ort_package()
+    honesty = _ort_honesty_note(kind, ort_package, listed)
+    if honesty:
+        notes.append(honesty)
 
     return HardwareProbe(
         platform=platform.system(),
@@ -289,7 +362,7 @@ def probe_hardware() -> HardwareProbe:
         ram_bar_level=memory.bar_level if memory else None,
         is_snapdragon=is_snapdragon,
         is_windows_arm64=os.name == "nt" and is_arm64,
-        providers=providers or ["CPUExecutionProvider"],
+        providers=listed,
         preferred_provider=preferred,
         provider_label=label,
         has_npu=bool(has_npu and providers),
@@ -297,4 +370,9 @@ def probe_hardware() -> HardwareProbe:
         qnn_htp_dir=str(htp_dir) if htp_dir else None,
         notes=" ".join(notes),
         memory=memory,
+        provider_kind=kind,
+        has_qnn=has_qnn,
+        has_directml=has_directml,
+        hexagon_qnn=has_qnn,
+        ort_package=ort_package,
     )

@@ -99,7 +99,9 @@ def test_add_custom_model(tmp_path, monkeypatch):
     ids = {s.model_id for s in list_specs()}
     assert "phi3_mini" in ids
     assert "whisper_tiny_int8" in ids
-    assert get_spec("llm").model_id == "phi3_mini"
+    assert get_spec("phi3_mini").slot == "llm"
+    # Builtin SmolLM keeps the default llm slot; overlay adds a heavier id.
+    assert get_spec("llm").model_id == "smollm2_135m_q4"
 
 
 def test_programmatic_overrides(tmp_path, monkeypatch):

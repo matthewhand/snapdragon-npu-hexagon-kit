@@ -82,6 +82,68 @@ CATALOG: tuple[ModelSpec, ...] = (
             "voices-v1.0.bin",
         ),
     ),
+    ModelSpec(
+        model_id="smollm2_135m_q4",
+        slot="llm",
+        name="SmolLM2 135M Instruct Q4 (ONNX)",
+        description=(
+            "SmolLM-class on-device chat model for first-gen 16 GB Copilot+ PCs. "
+            "Q4 ONNX (~174 MB) — not an 8 GB default LLM."
+        ),
+        disk_mb=180,  # model_q4.onnx ~173.6 MB + tokenizer.json ~2.0 MB
+        ram_mb=400,
+        artifacts=(
+            Artifact(
+                url=(
+                    "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/"
+                    "resolve/12fd25f77366fa6b3b4b768ec3050bf629380bac/onnx/model_q4.onnx"
+                ),
+                filename="model_q4.onnx",
+                kind="file",
+                sha256="933577110303a2964096d19b6f15d3b4639bef7f99481ac0b61d9f3ad72f392a",
+            ),
+            Artifact(
+                url=(
+                    "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/"
+                    "resolve/12fd25f77366fa6b3b4b768ec3050bf629380bac/tokenizer.json"
+                ),
+                filename="tokenizer.json",
+                kind="file",
+                sha256="9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+            ),
+        ),
+        expected_files=(
+            "model_q4.onnx",
+            "tokenizer.json",
+        ),
+        notes="Pinned HuggingFaceTB SmolLM2-135M-Instruct commit 12fd25f77366fa6b3b4b768ec3050bf629380bac.",
+    ),
+    ModelSpec(
+        model_id="ppocrv4_det_mobile",
+        slot="vision",
+        name="PP-OCRv4 mobile text detector (ONNX)",
+        description=(
+            "Small OCR text-detection model (RapidOCR PP-OCRv4 mobile). "
+            "Detector-scale, not a multi-GB vision LLM."
+        ),
+        disk_mb=8,  # published RapidOCR mobile det is ~4–5 MB; slack for the stream
+        ram_mb=80,
+        artifacts=(
+            Artifact(
+                url=(
+                    "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/"
+                    "v3.9.2/onnx/PP-OCRv4/det/ch_PP-OCRv4_det_mobile.onnx"
+                ),
+                filename="ch_PP-OCRv4_det_mobile.onnx",
+                kind="file",
+                sha256="d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+            ),
+        ),
+        expected_files=(
+            "ch_PP-OCRv4_det_mobile.onnx",
+        ),
+        notes="Official RapidOCR v3.9.2 SHA-256 pin. Kit-owned catalog URL — apps should not vendor a private list.",
+    ),
 )
 
 
