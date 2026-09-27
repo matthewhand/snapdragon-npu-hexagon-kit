@@ -1,4 +1,4 @@
-"""CLI: hexagon hw | models list | download | path | delete."""
+"""CLI: hexagon hw | status | preflight | config | models | hub."""
 
 from __future__ import annotations
 
@@ -23,11 +23,17 @@ from .hub import (
 from .hw import probe_hardware
 from .leases import ModelInUse
 from .preflight import PreflightBlocked, preflight
-from .status import delete_cached, start_download, ui_snapshot
+from .settings import KIT_SETTINGS, SettingsError, save_settings, settings_snapshot
+from .status import delete_cached, model_card, start_download, ui_snapshot
 from .xdg import default_config_path
+
+_last_progress_name: list[str] = []
 
 
 def _progress(name: str, downloaded: int, total: int) -> None:
+    if _last_progress_name and _last_progress_name[0] != name:
+        print(file=sys.stderr)
+    _last_progress_name[:] = [name]
     if total > 0:
         pct = int(downloaded * 100 / total)
         mb = downloaded / (1024 * 1024)
@@ -44,9 +50,114 @@ def cmd_hw(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_status(_args: argparse.Namespace) -> int:
-    print(json.dumps(ui_snapshot(), indent=2))
+def _holder_text(held: dict | None) -> str:
+    if not held:
+        return "-"
+    who = "this process" if held.get("isSelf") else held.get("exe") or "?"
+    return f"{who} (pid {held.get('pid')})"
+
+
+def _cards_table(cards: list[dict]) -> list[str]:
+    rows = [("SLOT", "MODEL", "STATUS", "RAM MB", "HELD BY", "ACTIONS")]
+    for card in cards:
+        status = card["statusLabel"]
+        if card.get("error"):
+            status += f": {card['error']}"
+        rows.append(
+            (
+                card["slot"],
+                card["id"],
+                status,
+                f"{card['ramMb']:.0f} ({card['ramFit']})",
+                _holder_text(card.get("heldBy")),
+                ",".join(card.get("actions") or []) or "-",
+            )
+        )
+    widths = [max(len(str(row[i])) for row in rows) for i in range(len(rows[0]) - 1)]
+    return [
+        "  ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row[:-1])) + "  " + row[-1]
+        for row in rows
+    ]
+
+
+def render_status_text(snap: dict) -> str:
+    """Human summary of ``ui_snapshot()``. Apps should bind the JSON, not this text."""
+    hw = snap["hardware"]
+    mem = hw.get("memory") or {}
+    storage = snap["storage"]
+    ram = (
+        f"RAM {mem.get('availableGb')} of {mem.get('totalGb')} GB free"
+        if mem
+        else "RAM unknown"
+    )
+    lines = [
+        f"hexagon-kit {snap.get('kitVersion', '')}  |  {hw.get('provider_label')} "
+        f"(ep_kind={hw.get('ep_kind')})  |  {ram}",
+        f"Cache {storage['cacheDir']}  ({storage['cacheMb']} MB used, "
+        f"{storage['diskFreeGb']} GB disk free)",
+        f"Config {snap['config']['path']}",
+        "",
+        *_cards_table(snap["models"]),
+        "",
+    ]
+    peers = snap["pool"]["peers"]
+    if peers:
+        lines.append("Loaded by:")
+        lines.extend(
+            f"  {p['slot']}: {_holder_text(p)} {p['ram_mb']:.0f} MB {p['model_id']}" for p in peers
+        )
+    else:
+        lines.append("Loaded by: nobody")
+    lines.append(f"Budget {snap['pool']['budgetMb']:.0f} MB (max_ram_mb)")
+    return "\n".join(lines)
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    snap = ui_snapshot()
+    if getattr(args, "text", False):
+        print(render_status_text(snap))
+    else:
+        print(json.dumps(snap, indent=2))
     return 0
+
+
+def cmd_models_status(args: argparse.Namespace) -> int:
+    if args.model:
+        cards = [model_card(args.model)]
+    else:
+        cards = ui_snapshot()["models"]
+    if args.text:
+        print("\n".join(_cards_table(cards)))
+    else:
+        print(json.dumps(cards if not args.model else cards[0], indent=2))
+    return 0
+
+
+def cmd_config_settings(_args: argparse.Namespace) -> int:
+    print(json.dumps(settings_snapshot(), indent=2))
+    return 0
+
+
+def _save_settings_cli(updates: dict) -> int:
+    try:
+        snap = save_settings(updates)
+    except SettingsError as exc:
+        print(json.dumps({"ok": False, "errors": exc.errors}, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"ok": True, "settings": snap}, indent=2))
+    locked = [f["key"] for f in snap["fields"] if f["key"] in updates and f["locked"]]
+    for key in locked:
+        field = next(f for f in snap["fields"] if f["key"] == key)
+        print(f"note: {key} is overridden by ${field['lockedBy']}; the file value is saved but inactive.", file=sys.stderr)
+    return 0
+
+
+def cmd_config_set(args: argparse.Namespace) -> int:
+    return _save_settings_cli({args.key: args.value})
+
+
+def cmd_config_unset(args: argparse.Namespace) -> int:
+    return _save_settings_cli({args.key: None})
 
 
 def cmd_preflight(args: argparse.Namespace) -> int:
@@ -246,19 +357,35 @@ def build_parser() -> argparse.ArgumentParser:
     hw = sub.add_parser("hw", help="Probe Snapdragon / Hexagon / DirectML / CPU")
     hw.set_defaults(func=cmd_hw)
 
-    status = sub.add_parser("status", help="JSON snapshot for Settings / SnapDrago model cards")
+    status = sub.add_parser(
+        "status",
+        help="ui_snapshot() JSON for Settings / model cards (--text for a summary)",
+    )
+    status.add_argument("--text", action="store_true", help="Human-readable summary instead of JSON")
     status.set_defaults(func=cmd_status)
 
     pf = sub.add_parser("preflight", help="RAM/disk guard before download or activate")
     pf.add_argument("model", help="Model id or slot")
     pf.set_defaults(func=cmd_preflight)
 
-    cfg = sub.add_parser("config", help="Show effective configuration and overlay path")
+    cfg = sub.add_parser("config", help="Show, describe, or edit the shared kit configuration")
     cfg_sub = cfg.add_subparsers(dest="config_cmd", required=True)
     cfg_show = cfg_sub.add_parser("show", help="Print the merged config (file + env + defaults)")
     cfg_show.set_defaults(func=cmd_config_show)
     cfg_path = cfg_sub.add_parser("path", help="Print the XDG config file path")
     cfg_path.set_defaults(func=cmd_config_path)
+    cfg_settings = cfg_sub.add_parser(
+        "settings", help="Settings schema JSON (fields, values, sources) — same as ui_snapshot()['settings']"
+    )
+    cfg_settings.set_defaults(func=cmd_config_settings)
+    setting_keys = tuple(field.key for field in KIT_SETTINGS)
+    cfg_set = cfg_sub.add_parser("set", help="Validate and save one setting to the shared config file")
+    cfg_set.add_argument("key", choices=setting_keys)
+    cfg_set.add_argument("value")
+    cfg_set.set_defaults(func=cmd_config_set)
+    cfg_unset = cfg_sub.add_parser("unset", help="Remove one setting from the config file (back to default)")
+    cfg_unset.add_argument("key", choices=setting_keys)
+    cfg_unset.set_defaults(func=cmd_config_unset)
 
     models = sub.add_parser("models", help="List, download, resolve, or delete cached models")
     models_sub = models.add_subparsers(dest="models_cmd", required=True)
@@ -278,6 +405,14 @@ def build_parser() -> argparse.ArgumentParser:
     lst.add_argument("--quantized", action="store_true", help="Hub: quantized models only")
     lst.add_argument("--llm", action="store_true", help="Hub: LLM / text-generation models")
     lst.set_defaults(func=cmd_models_list)
+
+    mstatus = models_sub.add_parser(
+        "status",
+        help="Model card JSON (same schema as ui_snapshot()['models']): status, progress, error, holder",
+    )
+    mstatus.add_argument("model", nargs="?", help="Model id or slot (default: all)")
+    mstatus.add_argument("--text", action="store_true", help="Table instead of JSON")
+    mstatus.set_defaults(func=cmd_models_status)
 
     hub = sub.add_parser("hub", help="Qualcomm AI Hub catalog (qai_hub_models_cli)")
     hub_sub = hub.add_subparsers(dest="hub_cmd", required=True)
@@ -350,6 +485,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except KeyboardInterrupt:
+        print("\ncancelled", file=sys.stderr)
+        return 130
+    except KeyError as exc:
+        print(f"error: {exc.args[0] if exc.args else exc}", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
