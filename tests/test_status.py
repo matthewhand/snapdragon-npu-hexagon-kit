@@ -9,7 +9,10 @@ def test_ui_snapshot_shape(monkeypatch, tmp_path):
     assert "storage" in snap
     assert "models" in snap
     assert "pool" in snap
+    assert "peers" in snap["pool"]
     assert "config" in snap
+    assert "hub" in snap
+    assert snap["hub"]["cli"]["package"] == "qai_hub_models_cli"
     ids = {card["id"] for card in snap["models"]}
     assert "whisper_tiny_int8" in ids
     assert "kokoro_int8" in ids

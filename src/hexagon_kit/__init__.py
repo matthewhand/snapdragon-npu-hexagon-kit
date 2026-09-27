@@ -1,20 +1,90 @@
 """Hexagon NPU kit: hardware probe, model catalog, shared XDG cache, and residency pool."""
 
-from .cache import ModelNotInstalled, ensure_model, is_installed, resolve
+from .cache import ModelNotInstalled, ensure_model, is_installed, peer_download, resolve
+from .leases import Lease, ModelInUse, holder_for, list_leases, take_lease, drop_lease
 from .catalog import CATALOG, ModelSpec
 from .config import KitConfig, active, get_spec, list_specs, load_config, reset_config
-from .hw import HardwareProbe, MemoryStatus, probe_hardware, read_memory_status
+from .hw import (
+    HardwareProbe,
+    MemoryStatus,
+    ProviderChoice,
+    choose_execution_provider,
+    probe_hardware,
+    read_memory_status,
+)
 from .preflight import PreflightBlocked, PreflightResult, preflight
 from .runtime import ModelPool, PoolBudgetExceeded, process_pool, reset_process_pool
 from .session import open_onnx, provider_chain
-from .status import delete_cached, model_card, start_download, storage_report, ui_snapshot
+from .credentials import credentials_status, hf_token, qai_hub_token, save_tokens
+from .hub import (
+    HubUnavailable,
+    fetch_hub_model,
+    hub_available,
+    hub_info,
+    hub_snapshot,
+    list_hf_community_models,
+    list_hub_models,
+    vendor_status,
+)
+from .settings import (
+    KIT_SETTINGS,
+    SETTINGS_SCHEMA_VERSION,
+    SettingField,
+    SettingsError,
+    save_settings,
+    settings_snapshot,
+    validate_settings,
+    validate_values,
+)
+from .lock import LockWaitExceeded
+from .status import (
+    SNAPSHOT_SCHEMA_VERSION,
+    DownloadCancelled,
+    DownloadInProgress,
+    cancel_download,
+    delete_cached,
+    download_jobs,
+    get_job,
+    model_card,
+    poll_jobs,
+    slot_info,
+    slots_summary,
+    start_download,
+    start_hub_download,
+    storage_report,
+    ui_snapshot,
+    watch_jobs,
+)
 from .xdg import default_cache_dir, default_config_path, xdg_cache_home, xdg_config_home, xdg_data_home
 
 __all__ = [
     "CATALOG",
+    "DownloadCancelled",
+    "DownloadInProgress",
+    "LockWaitExceeded",
+    "SNAPSHOT_SCHEMA_VERSION",
+    "KIT_SETTINGS",
+    "SETTINGS_SCHEMA_VERSION",
+    "SettingField",
+    "SettingsError",
+    "save_settings",
+    "settings_snapshot",
+    "validate_settings",
+    "validate_values",
+    "cancel_download",
+    "download_jobs",
+    "get_job",
+    "peer_download",
+    "poll_jobs",
+    "slot_info",
+    "slots_summary",
     "HardwareProbe",
+    "HubUnavailable",
+    "ProviderChoice",
     "KitConfig",
+    "Lease",
     "MemoryStatus",
+    "ModelInUse",
     "PreflightBlocked",
     "PreflightResult",
     "ModelNotInstalled",
@@ -22,30 +92,49 @@ __all__ = [
     "ModelSpec",
     "PoolBudgetExceeded",
     "active",
+    "choose_execution_provider",
+    "credentials_status",
     "delete_cached",
     "default_cache_dir",
     "default_config_path",
+    "drop_lease",
     "ensure_model",
+    "fetch_hub_model",
+    "holder_for",
+    "hub_available",
+    "hub_info",
+    "hub_snapshot",
+    "hf_token",
     "get_spec",
     "is_installed",
+    "list_hf_community_models",
+    "list_hub_models",
+    "list_leases",
     "list_specs",
     "load_config",
     "open_onnx",
     "preflight",
     "probe_hardware",
     "provider_chain",
+    "qai_hub_token",
+    "save_tokens",
     "read_memory_status",
     "process_pool",
     "reset_config",
     "reset_process_pool",
     "resolve",
     "start_download",
+    "start_hub_download",
     "storage_report",
+    "take_lease",
     "ui_snapshot",
+    "vendor_status",
+    "watch_jobs",
     "model_card",
     "xdg_cache_home",
     "xdg_config_home",
     "xdg_data_home",
+    "__version__",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

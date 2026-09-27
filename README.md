@@ -15,11 +15,27 @@ This is a model cache + hardware probe + preflight library, not an application
 framework. It does not draw widgets, load Whisper/Kokoro engines, or bind a
 network port.
 
-Source: https://github.com/matthewhand/snapdragon-npu-hexagon-kit
+This tree is the **private source of truth**
+(`snapdragon-npu-hexagon-kit-private`). Public name:
+https://github.com/matthewhand/snapdragon-npu-hexagon-kit (human-gated
+promote only — do not force-push that mirror from here).
 
-The package is **not on PyPI**. Install from this tree.
+The package is **not on PyPI** (`import hexagon_kit`, CLI `hexagon`).
+Version **0.3.0** is a private publish candidate. Install notes:
+[docs/INSTALL.md](docs/INSTALL.md) (`[ort]` = CPU `onnxruntime`;
+`[qnn]` = Hexagon `onnxruntime_qnn`). Publish checklist:
+[docs/PUBLISH.md](docs/PUBLISH.md).
 
-TODO: publish `snapdragon-npu-hexagon-kit` to PyPI (`import hexagon_kit`, CLI `hexagon`). Do not upload until a PyPI token is available. GitHub Actions CI runs CPython 3.12/3.13 on `ubuntu-latest`; that is not a Hexagon box.
+**Consumer apps:** follow [docs/APP_INTEGRATION.md](docs/APP_INTEGRATION.md) —
+depend on `hexagon_kit`, call `probe_hardware()` / EP honesty fields,
+`ensure_model` / `preflight` for slots `llm` and `vision`, and **never
+advertise Hexagon/QNN** unless `QNNExecutionProvider` is listed. Lane-1
+CI: import `hexagon_kit.testing` (do not invent a fake EP probe; fixture
+catalog stays offline).
+
+GitHub Actions CI runs CPython 3.12/3.13 on `ubuntu-latest`; that is not
+a Hexagon box. NPU-marked tests skip when QNN is absent. Do not upload
+to PyPI until a human has a token and promotes.
 
 ---
 
@@ -47,25 +63,85 @@ need a Hexagon).
 
 ## Install
 
+Full consumer recipe (git pin, extras, wheel): [docs/INSTALL.md](docs/INSTALL.md).
+
 ```powershell
 pip install -e .
 pip install -e ".[dev]"    # pytest
 ```
 
 The `hexagon` script is on PATH after the editable install. Equivalent:
-`python -m hexagon_kit`.
+`python -m hexagon_kit`. `hexagon --version` prints `0.3.0` on this
+candidate.
 
-Optional ONNX Runtime extra:
+Optional ONNX Runtime extras — **these are different packages**:
+
+| Extra | Installs | What `hexagon hw` can list |
+|---|---|---|
+| `[ort]` | upstream `onnxruntime>=1.20` | **CPU-only** on most wheels (`CPUExecutionProvider`). Not Hexagon QNN. |
+| `[qnn]` | `onnxruntime_qnn` | `QNNExecutionProvider` on Windows ARM64 Copilot+ with HTP drivers. |
 
 ```powershell
-pip install -e ".[ort]"
+pip install -e ".[ort]"    # CPU-oriented. Does not equal Qualcomm Hexagon QNN.
+pip install -e ".[qnn]"    # Hexagon QNN EP. Separate package from [ort].
 ```
 
-That extra is upstream `onnxruntime>=1.20`. On many machines that wheel is
-CPU-only. It is **not** Qualcomm’s QNN build. Hexagon listing needs
-`onnxruntime_qnn` (a different package); this extra does not install it.
+`[ort]` never installs `onnxruntime_qnn`. If ORT reports only
+`CPUExecutionProvider`, that is the CPU extra, not a silent Hexagon path.
+DirectML (`DmlExecutionProvider`, typically `onnxruntime-directml`) is a
+third listing — Adreno GPU, not QNN HTP.
+
+**Hub is not required.** Default STT/TTS downloads are public GitHub Releases
+(no Qualcomm account, no Hugging Face login):
+
+| Slot | Package | URL |
+|---|---|---|
+| `stt` | sherpa-onnx Whisper Tiny EN INT8 | `github.com/k2-fsa/sherpa-onnx/releases` |
+| `tts` | Kokoro v1.0 INT8 + voices | `github.com/thewh1teagle/kokoro-onnx/releases` |
+
+Optional Qualcomm AI Hub catalog (still no Workbench token for list/fetch):
+
+```powershell
+pip install -e ".[hub]"    # qai_hub_models_cli — public S3 assets
+```
+
+`hexagon hub list` / `info` / `fetch` wrap that CLI. Prebuilt Hub zips come from
+`qaihub-public-assets.s3.us-west-2.amazonaws.com`.
+
+Optional tokens (never stored in `config.json`):
+
+```powershell
+hexagon hub configure --hf-token hf_...     # gated HF + community qai-hub-models
+hexagon hub configure --qai-token ...       # Workbench compile only
+```
+
+Env also works: `HF_TOKEN`, `QAI_HUB_API_TOKEN`. With an HF token, builtin
+`hexagon models download stt|tts` prefers the Hugging Face hub cache
+(`csukuangfj/sherpa-onnx-whisper-tiny.en`, Kokoro mirrors) so a file already
+fetched by `transformers` / `huggingface_hub` is hard-linked into the kit slot
+instead of downloaded again. `hexagon hub list --community` lists newer HF
+recipes tagged `qai-hub-models`, and `hexagon hub fetch owner/name` uses
+`snapshot_download` into that same HF cache. GitHub Releases remain the
+no-token fallback. SHA-256 still applies; a mismatched HF blob falls back to
+GitHub. A Qualcomm
+Workbench token is **not** required for builtin GitHub STT/TTS or public Hub
+S3 fetch. Kokoro is not a Hub model, so builtin `tts` stays GitHub.
 Without any ORT package, `probe_hardware().providers` is
-`["CPUExecutionProvider"]`.
+`["CPUExecutionProvider"]` and `ep_kind` is `cpu`.
+
+`probe_hardware()` / `hexagon hw` distinguish the three EPs from what ORT
+actually lists (not from “an ORT wheel is installed”):
+
+| `ep_kind` | Provider | Means |
+|---|---|---|
+| `qnn` | `QNNExecutionProvider` | Hexagon HTP. Needs `onnxruntime_qnn`. |
+| `directml` | `DmlExecutionProvider` | DirectML. Not QNN. |
+| `cpu` | `CPUExecutionProvider` | CPU (`[ort]` or no ORT). Not Hexagon. |
+
+`ort_package` is `onnxruntime` / `onnxruntime-directml` / `onnxruntime_qnn`.
+`qnn_package` is true only when `import onnxruntime_qnn` works. Existing
+fields (`providers`, `preferred_provider`, `has_npu`) stay stable for
+callers.
 
 Provider preference, when ORT reports them: **QNN → DirectML → CPU**. HTP
 discovery is a glob of `qcnspmcdm*/HTP` plus `HEXAGON_QNN_HTP_DIR` / config —
@@ -149,15 +225,30 @@ hexagon config show
 ```powershell
 hexagon hw
 hexagon status
+hexagon status --text
 hexagon preflight tts
 hexagon config show
+hexagon config settings
+hexagon config set max_ram_mb 4096
+hexagon config unset max_ram_mb
 hexagon models cache
 hexagon models list
+hexagon models status
+hexagon models status llm --text
 hexagon models download whisper_tiny_int8
 hexagon models download kokoro_int8
+hexagon models download llm
+hexagon models download vision
 hexagon models path stt
 hexagon models path tts
+hexagon models path llm
+hexagon models path vision
 hexagon models delete whisper_tiny_int8
+hexagon hub status
+hexagon hub list --domain Audio
+hexagon hub list --use-case "Speech Recognition"
+hexagon hub info Whisper-Tiny
+hexagon hub fetch whisper_tiny --runtime onnx --precision float
 ```
 
 - `hexagon preflight <model>` prints JSON and exits **0** if it fits, **2** if
@@ -169,7 +260,11 @@ hexagon models delete whisper_tiny_int8
   not installed (`hexagon models download …` first).
 - `hexagon status` is `ui_snapshot()` as JSON: hardware, live RAM, disk, catalog
   cards (`actions`, `ramFit` / `ramFitLabel`), pool, config sources. This kit
-  does not draw the Settings UI.
+  does not draw the Settings UI. `--text` prints a table for people.
+- `hexagon models status [model]` prints the same model cards (status,
+  progress, error, lease holder). `hexagon config settings | set | unset`
+  reads and validates the shared settings schema. Card and settings fields
+  are documented in [docs/APP_INTEGRATION.md](docs/APP_INTEGRATION.md).
 
 Live RAM is `GlobalMemoryStatusEx` on Windows (`total`, `available`, `load %`,
 `barLevel` green / orange / red) or `MemAvailable` on Linux.
@@ -185,7 +280,15 @@ from hexagon_kit import (
     resolve,
     process_pool,
     PreflightBlocked,
+    list_hub_models,
+    fetch_hub_model,
+    HubUnavailable,
 )
+
+try:
+    audio = list_hub_models(domain="Audio", use_case="Speech Recognition")
+except HubUnavailable:
+    audio = []  # pip install -e ".[hub]"
 
 print(probe_hardware())
 
@@ -207,11 +310,14 @@ pool.release("stt")
 `ensure_model(..., force=True)` and `pool.acquire(..., force=True)` are the
 same explicit bypass as `hexagon models download --force`.
 
-`open_onnx(path)` (optional `ort` extra) is `onnxruntime.InferenceSession` with
-`provider_chain()`. It is not a sherpa Whisper or Kokoro wrapper.
+`open_onnx(path)` uses `onnxruntime.InferenceSession` with `provider_chain()`.
+The optional `[ort]` extra is CPU-oriented; Hexagon QNN needs
+`onnxruntime_qnn` so the chain can include `QNNExecutionProvider`. It is not
+a sherpa Whisper or Kokoro wrapper.
 
-Apps should call `resolve("stt")` / `resolve("tts")` instead of hardcoding
-`C:\tmp\npu_pipeline\models`.
+Apps should call `resolve("stt")` / `resolve("tts")` / `resolve("llm")` /
+`resolve("vision")` instead of hardcoding `C:\tmp\npu_pipeline\models`.
+See [docs/APP_INTEGRATION.md](docs/APP_INTEGRATION.md).
 
 ---
 
@@ -234,8 +340,8 @@ Apps should call `resolve("stt")` / `resolve("tts")` instead of hardcoding
 `resolve` does not.
 
 A 4 GB LLM added via config overlay is refused on a 16 GB box with ~2 GB free
-unless the caller passes `force=True`. The builtin catalog does not include
-Gemma / LLM / vision.
+unless the caller passes `force=True`. Builtin `llm` / `vision` stay
+SmolLM-class / small OCR (`ram_mb` well under 1 GB), not 8 GB defaults.
 
 ---
 
@@ -246,24 +352,35 @@ Gemma / LLM / vision.
 | XDG weight files | Yes (one download) | kit cache |
 | OS page cache of those files | Yes, opportunistically | kernel |
 | Loaded ORT / sherpa / Hexagon sessions | **No** — per process | `ModelPool` inside each app |
-| Cross-app NPU SRAM / daemon | Not in this kit | future work; port would come from config/env. This library does not bind 8765 or 47831. |
+| Slot lease (who has STT/TTS loaded) | Yes (`leases.json`) | kit; exclusive unless `force=True` |
+| Cross-app NPU SRAM / daemon | Not in this kit | future work. This library does not bind 8765 or 47831. |
 
 `ModelPool` is in-process: one load per slot, refcounts, evicts unused slots,
 default budget 3.5 GB. It does not share Hexagon SRAM between Persona and
-SnapDrago.
+SnapDrago. A cross-process **lease** records which PID holds each slot so a
+second app is blocked (or must Force) and delete cannot yank files in use.
+`ui_snapshot()["pool"]["peers"]` lists holders.
 
 ---
 
 ## Builtin catalog
 
-| Slot | Id | Artifacts |
-|---|---|---|
-| `stt` | `whisper_tiny_int8` | sherpa-onnx Whisper Tiny EN INT8 (encoder + decoder + tokens), unpacked from the upstream `.tar.bz2` |
-| `tts` | `kokoro_int8` | `kokoro-v1.0.int8.onnx` + `voices-v1.0.bin` |
+The kit owns these slots. Each entry pins `sha256`, `ram_mb`, `disk_mb`, and
+`expected_files`. `hexagon models list` shows them; `hexagon preflight` /
+`ensure_model` gate downloads.
 
-Each entry has `slot`, `ram_mb`, `disk_mb`, and `expected_files`. Preflight and
-`ui_snapshot` use those fields. Add further models through `models[]` in config
-(or a future catalog slice) when a second app actually loads the same files.
+| Slot | Id | Artifacts | ~RAM |
+|---|---|---|---|
+| `stt` | `whisper_tiny_int8` | sherpa-onnx Whisper Tiny EN INT8 (encoder + decoder + tokens), unpacked from the upstream `.tar.bz2` | 150 MB |
+| `tts` | `kokoro_int8` | `kokoro-v1.0.int8.onnx` + `voices-v1.0.bin` | 250 MB |
+| `llm` | `smollm2_135m_int8` | SmolLM2 135M Instruct INT8 ONNX + `tokenizer.json` | 400 MB |
+| `vision` | `rapidocr_ppocrv4_mobile` | RapidOCR PP-OCRv4 mobile det + rec ONNX | 200 MB |
+
+`llm` / `vision` are first-gen 16 GB Copilot+ sized (SmolLM-class / small OCR).
+There is no 8 GB default. Preflight and `ui_snapshot` use those fields. Add
+further models through `models[]` in config when a second app actually loads
+the same files. Overlaying a new `model_id` on slot `llm` does not replace
+the builtin slot lookup; `get_spec("llm")` still returns the kit pin.
 
 ---
 

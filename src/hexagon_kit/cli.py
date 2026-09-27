@@ -1,21 +1,53 @@
-"""CLI: hexagon hw | models list | download | path | delete."""
+"""CLI: hexagon hw | status | preflight | config | models | hub | jobs."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 from . import __version__
 from .cache import is_installed, resolve
 from .config import active, get_spec, list_specs
+from .credentials import save_tokens
+from .hub import (
+    HubUnavailable,
+    delete_hub_model,
+    fetch_hub_model,
+    hub_info,
+    hub_is_installed,
+    hub_model_dir,
+    list_hub_models,
+    vendor_status,
+)
 from .hw import probe_hardware
+from .leases import ModelInUse
 from .preflight import PreflightBlocked, preflight
-from .status import delete_cached, start_download, ui_snapshot
+from .settings import KIT_SETTINGS, SettingsError, save_settings, settings_snapshot
+from .status import (
+    adopt_detached_pid,
+    cancel_download,
+    delete_cached,
+    download_jobs,
+    fail_detached_download,
+    get_job,
+    model_card,
+    run_download_foreground,
+    seed_detached_download,
+    ui_snapshot,
+)
 from .xdg import default_config_path
+
+_last_progress_name: list[str] = []
 
 
 def _progress(name: str, downloaded: int, total: int) -> None:
+    if _last_progress_name and _last_progress_name[0] != name:
+        print(file=sys.stderr)
+    _last_progress_name[:] = [name]
     if total > 0:
         pct = int(downloaded * 100 / total)
         mb = downloaded / (1024 * 1024)
@@ -32,9 +64,114 @@ def cmd_hw(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_status(_args: argparse.Namespace) -> int:
-    print(json.dumps(ui_snapshot(), indent=2))
+def _holder_text(held: dict | None) -> str:
+    if not held:
+        return "-"
+    who = "this process" if held.get("isSelf") else held.get("exe") or "?"
+    return f"{who} (pid {held.get('pid')})"
+
+
+def _cards_table(cards: list[dict]) -> list[str]:
+    rows = [("SLOT", "MODEL", "STATUS", "RAM MB", "HELD BY", "ACTIONS")]
+    for card in cards:
+        status = card["statusLabel"]
+        if card.get("error"):
+            status += f": {card['error']}"
+        rows.append(
+            (
+                card["slot"],
+                card["id"],
+                status,
+                f"{card['ramMb']:.0f} ({card['ramFit']})",
+                _holder_text(card.get("heldBy")),
+                ",".join(card.get("actions") or []) or "-",
+            )
+        )
+    widths = [max(len(str(row[i])) for row in rows) for i in range(len(rows[0]) - 1)]
+    return [
+        "  ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row[:-1])) + "  " + row[-1]
+        for row in rows
+    ]
+
+
+def render_status_text(snap: dict) -> str:
+    """Human summary of ``ui_snapshot()``. Apps should bind the JSON, not this text."""
+    hw = snap["hardware"]
+    mem = hw.get("memory") or {}
+    storage = snap["storage"]
+    ram = (
+        f"RAM {mem.get('availableGb')} of {mem.get('totalGb')} GB free"
+        if mem
+        else "RAM unknown"
+    )
+    lines = [
+        f"hexagon-kit {snap.get('kitVersion', '')}  |  {hw.get('provider_label')} "
+        f"(ep_kind={hw.get('ep_kind')})  |  {ram}",
+        f"Cache {storage['cacheDir']}  ({storage['cacheMb']} MB used, "
+        f"{storage['diskFreeGb']} GB disk free)",
+        f"Config {snap['config']['path']}",
+        "",
+        *_cards_table(snap["models"]),
+        "",
+    ]
+    peers = snap["pool"]["peers"]
+    if peers:
+        lines.append("Loaded by:")
+        lines.extend(
+            f"  {p['slot']}: {_holder_text(p)} {p['ram_mb']:.0f} MB {p['model_id']}" for p in peers
+        )
+    else:
+        lines.append("Loaded by: nobody")
+    lines.append(f"Budget {snap['pool']['budgetMb']:.0f} MB (max_ram_mb)")
+    return "\n".join(lines)
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    snap = ui_snapshot()
+    if getattr(args, "text", False):
+        print(render_status_text(snap))
+    else:
+        print(json.dumps(snap, indent=2))
     return 0
+
+
+def cmd_models_status(args: argparse.Namespace) -> int:
+    if args.model:
+        cards = [model_card(args.model)]
+    else:
+        cards = ui_snapshot()["models"]
+    if args.text:
+        print("\n".join(_cards_table(cards)))
+    else:
+        print(json.dumps(cards if not args.model else cards[0], indent=2))
+    return 0
+
+
+def cmd_config_settings(_args: argparse.Namespace) -> int:
+    print(json.dumps(settings_snapshot(), indent=2))
+    return 0
+
+
+def _save_settings_cli(updates: dict) -> int:
+    try:
+        snap = save_settings(updates)
+    except SettingsError as exc:
+        print(json.dumps({"ok": False, "errors": exc.errors}, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"ok": True, "settings": snap}, indent=2))
+    locked = [f["key"] for f in snap["fields"] if f["key"] in updates and f["locked"]]
+    for key in locked:
+        field = next(f for f in snap["fields"] if f["key"] == key)
+        print(f"note: {key} is overridden by ${field['lockedBy']}; the file value is saved but inactive.", file=sys.stderr)
+    return 0
+
+
+def cmd_config_set(args: argparse.Namespace) -> int:
+    return _save_settings_cli({args.key: args.value})
+
+
+def cmd_config_unset(args: argparse.Namespace) -> int:
+    return _save_settings_cli({args.key: None})
 
 
 def cmd_preflight(args: argparse.Namespace) -> int:
@@ -58,37 +195,254 @@ def cmd_config_show(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_models_list(_args: argparse.Namespace) -> int:
+def _artifact_origin(url: str) -> str:
+    host = url.split("://", 1)[-1].split("/", 1)[0].lower()
+    if host.endswith("github.com"):
+        return "github"
+    if host.endswith("huggingface.co"):
+        return "huggingface"
+    return host or "unknown"
+
+
+def _builtin_rows() -> list[dict]:
     rows = []
     for spec in list_specs():
+        urls = [art.url for art in spec.artifacts]
         rows.append(
             {
                 "id": spec.model_id,
                 "slot": spec.slot,
                 "name": spec.name,
+                "source": "builtin",
+                "origin": _artifact_origin(urls[0]) if urls else "unknown",
+                "urls": urls,
                 "disk_mb": spec.disk_mb,
+                "ram_mb": spec.ram_mb,
+                "expected_files": list(spec.expected_files),
                 "installed": is_installed(spec.model_id),
             }
         )
+    return rows
+
+
+def cmd_models_list(args: argparse.Namespace) -> int:
+    source = getattr(args, "source", "builtin") or "builtin"
+    domain = getattr(args, "domain", None)
+    use_case = getattr(args, "use_case", None)
+    quantized = getattr(args, "quantized", False) or None
+    llm = getattr(args, "llm", False) or None
+    rows: list[dict] = []
+    if source in {"builtin", "all"}:
+        rows.extend(_builtin_rows())
+    if source in {"hub", "all"}:
+        try:
+            rows.extend(
+                list_hub_models(domain=domain, use_case=use_case, quantized=quantized, llm=llm)
+            )
+        except HubUnavailable as exc:
+            if source == "hub":
+                print(json.dumps({"error": str(exc), "available": False}), file=sys.stderr)
+                return 2
     print(json.dumps(rows, indent=2))
+    return 0
+
+
+def cmd_hub_status(_args: argparse.Namespace) -> int:
+    payload = vendor_status()
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def cmd_hub_list(args: argparse.Namespace) -> int:
+    try:
+        rows = list_hub_models(
+            domain=args.domain,
+            use_case=args.use_case,
+            quantized=True if args.quantized else None,
+            llm=True if args.llm else None,
+            tag=args.tag,
+            community=True if args.community else None,
+        )
+    except HubUnavailable as exc:
+        print(json.dumps({"error": str(exc), "available": False}), file=sys.stderr)
+        return 2
+    print(json.dumps(rows, indent=2))
+    return 0
+
+
+def cmd_hub_info(args: argparse.Namespace) -> int:
+    try:
+        print(json.dumps(hub_info(args.model), indent=2))
+    except HubUnavailable as exc:
+        print(json.dumps({"error": str(exc), "available": False}), file=sys.stderr)
+        return 2
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_hub_fetch(args: argparse.Namespace) -> int:
+    try:
+        dest = fetch_hub_model(
+            args.model,
+            runtime=args.runtime,
+            precision=args.precision,
+            chipset=args.chipset,
+            device=args.device,
+        )
+    except HubUnavailable as exc:
+        print(json.dumps({"error": str(exc), "available": False}), file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(str(dest))
+    return 0
+
+
+def cmd_hub_path(args: argparse.Namespace) -> int:
+    if not hub_is_installed(args.model):
+        print(f"error: hub model {args.model!r} is not installed", file=sys.stderr)
+        return 1
+    print(str(hub_model_dir(args.model)))
+    return 0
+
+
+def cmd_hub_delete(args: argparse.Namespace) -> int:
+    delete_hub_model(args.model)
+    print(f"Deleted hub/{args.model.strip().lower()}")
+    return 0
+
+
+def cmd_hub_configure(args: argparse.Namespace) -> int:
+    hf = args.hf_token
+    qai = args.qai_token
+    if hf is None and qai is None:
+        print(json.dumps(vendor_status()["credentials"], indent=2))
+        return 0
+    path = save_tokens(hf_token_value=hf, qai_token_value=qai)
+    print(json.dumps({"ok": True, "secretsPath": str(path), "credentials": vendor_status()["credentials"]}, indent=2))
+    return 0
+
+
+def _child_env() -> dict[str, str]:
+    env = os.environ.copy()
+    pkg = Path(__file__).resolve().parent
+    src = pkg.parent
+    if pkg.name == "hexagon_kit" and src.name == "src":
+        current = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(src) + (os.pathsep + current if current else "")
+    return env
+
+
+def spawn_detached(argv: list[str]) -> int:
+    """Start ``argv`` in a new session so it keeps running after this process exits.
+
+    Returns the child pid. The child is not a daemon thread of this process.
+    """
+    kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+        "env": _child_env(),
+    }
+    if os.name == "nt":
+        detached = 0x00000008
+        new_group = 0x00000200
+        no_window = 0x08000000
+        kwargs["creationflags"] = detached | new_group | no_window
+    else:
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(argv, **kwargs)
+    return int(proc.pid)
+
+
+def _worker_argv(model_id: str, *, force: bool) -> list[str]:
+    argv = [sys.executable, "-m", "hexagon_kit", "models", "download", model_id, "--detach-worker"]
+    if force:
+        argv.append("--force")
+    return argv
+
+
+def cmd_jobs_list(_args: argparse.Namespace) -> int:
+    print(json.dumps(download_jobs(), indent=2))
+    return 0
+
+
+def cmd_jobs_status(args: argparse.Namespace) -> int:
+    job = get_job(args.model)
+    if job is None:
+        print(json.dumps({"id": args.model, "state": "idle"}, indent=2))
+        return 0
+    print(json.dumps(job, indent=2))
+    return 0
+
+
+def cmd_jobs_cancel(args: argparse.Namespace) -> int:
+    print(json.dumps(cancel_download(args.model), indent=2))
     return 0
 
 
 def cmd_models_download(args: argparse.Namespace) -> int:
     spec = get_spec(args.model)
+    if args.detach_worker:
+        job = run_download_foreground(spec.model_id, force=args.force)
+        if job.get("state") == "blocked":
+            print(json.dumps(job, indent=2), file=sys.stderr)
+            return 2
+        if job.get("state") == "failed":
+            print(json.dumps(job, indent=2), file=sys.stderr)
+            return 1
+        return 0
     if args.async_job:
-        print(json.dumps(start_download(spec.model_id, force=args.force), indent=2))
+        if not args.force:
+            guard = preflight(spec.model_id)
+            if not guard.ok:
+                print(json.dumps(guard.to_dict(), indent=2), file=sys.stderr)
+                return 2
+        seeded = seed_detached_download(spec.model_id, force=args.force)
+        if seeded.get("pid") not in (None, os.getpid()) and seeded.get("state") in {
+            "downloading",
+            "cancelling",
+            "waiting_on_lock",
+        }:
+            print(json.dumps(seeded, indent=2))
+            return 0
+        try:
+            pid = spawn_detached(_worker_argv(spec.model_id, force=args.force))
+        except OSError as exc:
+            failed = fail_detached_download(
+                spec.model_id, f"Could not start detached download: {exc}"
+            )
+            print(json.dumps(failed, indent=2), file=sys.stderr)
+            return 1
+        job = adopt_detached_pid(spec.model_id, pid) or {**seeded, "pid": pid}
+        print(json.dumps(job, indent=2))
         return 0
     print(f"Downloading {spec.name} ({spec.model_id})...", file=sys.stderr)
     from .cache import download_model
 
+    def progress(name: str, downloaded: int, total: int) -> None:
+        if args.json_lines:
+            payload = {"file": name, "downloaded": downloaded, "total": total}
+            if total > 0:
+                payload["pct"] = int(downloaded * 100 / total)
+            print(json.dumps(payload), flush=True)
+            return
+        _progress(name, downloaded, total)
+
     try:
-        dest = download_model(spec.model_id, progress=_progress, force=args.force)
+        dest = download_model(spec.model_id, progress=progress, force=args.force)
     except PreflightBlocked as exc:
         print(json.dumps(exc.result.to_dict(), indent=2), file=sys.stderr)
         return 2
-    print(file=sys.stderr)
-    print(str(dest))
+    if args.json_lines:
+        print(json.dumps({"state": "ready", "path": str(dest)}), flush=True)
+    else:
+        print(file=sys.stderr)
+        print(str(dest))
     return 0
 
 
@@ -99,7 +453,11 @@ def cmd_models_path(args: argparse.Namespace) -> int:
 
 def cmd_models_delete(args: argparse.Namespace) -> int:
     spec = get_spec(args.model)
-    delete_cached(spec.model_id)
+    try:
+        delete_cached(spec.model_id)
+    except ModelInUse as exc:
+        print(json.dumps({"error": str(exc), "slot": exc.slot, "holder": exc.holder.to_dict()}, indent=2))
+        return 2
     print(f"Deleted {spec.model_id}")
     return 0
 
@@ -115,19 +473,46 @@ def build_parser() -> argparse.ArgumentParser:
     hw = sub.add_parser("hw", help="Probe Snapdragon / Hexagon / DirectML / CPU")
     hw.set_defaults(func=cmd_hw)
 
-    status = sub.add_parser("status", help="JSON snapshot for Settings / SnapDrago model cards")
+    status = sub.add_parser(
+        "status",
+        help="ui_snapshot() JSON for Settings / model cards (--text for a summary)",
+    )
+    status.add_argument("--text", action="store_true", help="Human-readable summary instead of JSON")
     status.set_defaults(func=cmd_status)
+
+    jobs = sub.add_parser("jobs", help="List, inspect, or cancel shared download jobs")
+    jobs_sub = jobs.add_subparsers(dest="jobs_cmd", required=True)
+    jobs_list = jobs_sub.add_parser("list", help="Shared download jobs as JSON")
+    jobs_list.set_defaults(func=cmd_jobs_list)
+    jobs_status = jobs_sub.add_parser("status", help="One download job as JSON")
+    jobs_status.add_argument("model", help="Model id or slot")
+    jobs_status.set_defaults(func=cmd_jobs_status)
+    jobs_cancel = jobs_sub.add_parser("cancel", help="Cancel an active download job")
+    jobs_cancel.add_argument("model", help="Model id or slot")
+    jobs_cancel.set_defaults(func=cmd_jobs_cancel)
 
     pf = sub.add_parser("preflight", help="RAM/disk guard before download or activate")
     pf.add_argument("model", help="Model id or slot")
     pf.set_defaults(func=cmd_preflight)
 
-    cfg = sub.add_parser("config", help="Show effective configuration and overlay path")
+    cfg = sub.add_parser("config", help="Show, describe, or edit the shared kit configuration")
     cfg_sub = cfg.add_subparsers(dest="config_cmd", required=True)
     cfg_show = cfg_sub.add_parser("show", help="Print the merged config (file + env + defaults)")
     cfg_show.set_defaults(func=cmd_config_show)
     cfg_path = cfg_sub.add_parser("path", help="Print the XDG config file path")
     cfg_path.set_defaults(func=cmd_config_path)
+    cfg_settings = cfg_sub.add_parser(
+        "settings", help="Settings schema JSON (fields, values, sources) — same as ui_snapshot()['settings']"
+    )
+    cfg_settings.set_defaults(func=cmd_config_settings)
+    setting_keys = tuple(field.key for field in KIT_SETTINGS)
+    cfg_set = cfg_sub.add_parser("set", help="Validate and save one setting to the shared config file")
+    cfg_set.add_argument("key", choices=setting_keys)
+    cfg_set.add_argument("value")
+    cfg_set.set_defaults(func=cmd_config_set)
+    cfg_unset = cfg_sub.add_parser("unset", help="Remove one setting from the config file (back to default)")
+    cfg_unset.add_argument("key", choices=setting_keys)
+    cfg_unset.set_defaults(func=cmd_config_unset)
 
     models = sub.add_parser("models", help="List, download, resolve, or delete cached models")
     models_sub = models.add_subparsers(dest="models_cmd", required=True)
@@ -136,11 +521,96 @@ def build_parser() -> argparse.ArgumentParser:
     cache.set_defaults(func=cmd_models_cache)
 
     lst = models_sub.add_parser("list", help="Show catalog and install status")
+    lst.add_argument(
+        "--source",
+        choices=("builtin", "hub", "all"),
+        default="builtin",
+        help="builtin kit catalog, Qualcomm AI Hub, or both",
+    )
+    lst.add_argument("--domain", help="Hub filter, e.g. Audio or Computer Vision")
+    lst.add_argument("--use-case", dest="use_case", help="Hub filter, e.g. Speech Recognition")
+    lst.add_argument("--quantized", action="store_true", help="Hub: quantized models only")
+    lst.add_argument("--llm", action="store_true", help="Hub: LLM / text-generation models")
     lst.set_defaults(func=cmd_models_list)
 
+    mstatus = models_sub.add_parser(
+        "status",
+        help="Model card JSON (same schema as ui_snapshot()['models']): status, progress, error, holder",
+    )
+    mstatus.add_argument("model", nargs="?", help="Model id or slot (default: all)")
+    mstatus.add_argument("--text", action="store_true", help="Table instead of JSON")
+    mstatus.set_defaults(func=cmd_models_status)
+
+    hub = sub.add_parser("hub", help="Qualcomm AI Hub catalog (qai_hub_models_cli)")
+    hub_sub = hub.add_subparsers(dest="hub_cmd", required=True)
+
+    hub_status = hub_sub.add_parser("status", help="Which Hub packages are importable")
+    hub_status.set_defaults(func=cmd_hub_status)
+
+    hub_list = hub_sub.add_parser("list", help="List Hub models by domain / use-case")
+    hub_list.add_argument("--domain", help="e.g. Audio, Computer Vision, Generative AI")
+    hub_list.add_argument("--use-case", dest="use_case", help="e.g. Speech Recognition")
+    hub_list.add_argument("--quantized", action="store_true")
+    hub_list.add_argument("--llm", action="store_true")
+    hub_list.add_argument("--tag", help="e.g. LLM, VLM, Real-Time")
+    hub_list.add_argument(
+        "--community",
+        action="store_true",
+        help="Include Hugging Face models tagged qai-hub-models (uses HF_TOKEN if set)",
+    )
+    hub_list.set_defaults(func=cmd_hub_list)
+
+    hub_cfg = hub_sub.add_parser(
+        "configure",
+        help="Save optional HF / Qualcomm tokens (not written to config.json)",
+    )
+    hub_cfg.add_argument("--hf-token", dest="hf_token", help="Hugging Face token (gated + community recipes)")
+    hub_cfg.add_argument("--qai-token", dest="qai_token", help="Qualcomm AI Hub Workbench API token")
+    hub_cfg.set_defaults(func=cmd_hub_configure)
+
+    hub_info_p = hub_sub.add_parser("info", help="Hub model metadata")
+    hub_info_p.add_argument("model", help="Hub model id or display name")
+    hub_info_p.set_defaults(func=cmd_hub_info)
+
+    hub_fetch = hub_sub.add_parser("fetch", help="Download a Hub asset into the shared cache")
+    hub_fetch.add_argument("model", help="Hub model id")
+    hub_fetch.add_argument("--runtime", default="onnx", help="onnx, qnn, tflite, …")
+    hub_fetch.add_argument("--precision", default="float", help="float, w8a8, …")
+    hub_fetch.add_argument("--chipset", help="e.g. qualcomm-snapdragon-x-elite (QNN AOT)")
+    hub_fetch.add_argument("--device", help="Hub device name (mutually exclusive with --chipset)")
+    hub_fetch.set_defaults(func=cmd_hub_fetch)
+
+    hub_path = hub_sub.add_parser("path", help="Print installed Hub model directory")
+    hub_path.add_argument("model")
+    hub_path.set_defaults(func=cmd_hub_path)
+
+    hub_del = hub_sub.add_parser("delete", help="Remove a cached Hub model")
+    hub_del.add_argument("model")
+    hub_del.set_defaults(func=cmd_hub_delete)
+
     dl = models_sub.add_parser("download", help="Download a catalog model into the shared cache")
-    dl.add_argument("model", help="Model id or slot (stt, tts, whisper_tiny_int8, kokoro_int8)")
-    dl.add_argument("--async", dest="async_job", action="store_true", help="Start a background download and print job JSON")
+    dl.add_argument(
+        "model",
+        help="Model id or slot (stt, tts, llm, vision, whisper_tiny_int8, …)",
+    )
+    dl.add_argument(
+        "--async",
+        dest="async_job",
+        action="store_true",
+        help="Start a detached download and print the job JSON. The download keeps running after this command exits.",
+    )
+    dl.add_argument(
+        "--detach-worker",
+        dest="detach_worker",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    dl.add_argument(
+        "--json-lines",
+        dest="json_lines",
+        action="store_true",
+        help="Print one JSON object per progress update on stdout (blocking download)",
+    )
     dl.add_argument("--force", action="store_true", help="Bypass RAM/disk preflight (may thrash this 16 GB PC)")
     dl.set_defaults(func=cmd_models_download)
 
@@ -159,6 +629,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except KeyboardInterrupt:
+        print("\ncancelled", file=sys.stderr)
+        return 130
+    except KeyError as exc:
+        print(f"error: {exc.args[0] if exc.args else exc}", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

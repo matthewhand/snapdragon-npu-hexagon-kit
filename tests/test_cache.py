@@ -109,3 +109,65 @@ def test_delete_model(tmp_path, monkeypatch):
     assert is_installed("tts") is True
     delete_model("tts")
     assert is_installed("tts") is False
+
+
+def test_is_installed_heals_complete_sentinel(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    spec = get_spec("stt")
+    slot = tmp_path / spec.slot
+    slot.mkdir()
+    for name in spec.expected_files:
+        (slot / name).write_bytes(b"x")
+    assert (slot / "COMPLETE").exists() is False
+    assert is_installed("stt") is True
+    assert (slot / "COMPLETE").is_file()
+
+
+def test_concurrent_download_second_sees_complete(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from hexagon_kit.cache import download_model
+    from hexagon_kit.catalog import get_spec as catalog_spec
+
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    spec = catalog_spec("kokoro_int8")
+    started = threading.Event()
+
+    def fake_fetch(artifact, staging, progress):
+        started.set()
+        time.sleep(0.15)
+        path = staging / artifact.filename
+        path.write_bytes(b"payload")
+        return path
+
+    monkeypatch.setattr("hexagon_kit.cache._fetch_artifact", fake_fetch)
+    monkeypatch.setattr(
+        "hexagon_kit.cache._require_preflight",
+        lambda model_id, force=False: None,
+    )
+
+    results: list[object] = []
+
+    def worker():
+        results.append(download_model("kokoro_int8", cache_dir=tmp_path, force=True))
+
+    first = threading.Thread(target=worker)
+    second = threading.Thread(target=worker)
+    first.start()
+    assert started.wait(2)
+    second.start()
+    first.join()
+    second.join()
+    assert all(p == tmp_path / spec.slot for p in results)
+    assert is_installed("kokoro_int8", tmp_path)
+
+
+def test_torn_slot_without_all_files_is_not_installed(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    spec = get_spec("stt")
+    slot = tmp_path / spec.slot
+    slot.mkdir()
+    (slot / spec.expected_files[0]).write_bytes(b"x")
+    (slot / "COMPLETE").write_text("ok\n", encoding="utf-8")
+    assert is_installed("stt") is False

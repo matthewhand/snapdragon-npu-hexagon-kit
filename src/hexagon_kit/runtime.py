@@ -17,6 +17,7 @@ from typing import Any
 
 from .cache import ensure_model, resolve
 from .config import get_spec
+from .leases import ModelInUse, drop_lease, take_lease
 from .preflight import PreflightBlocked, preflight
 
 Loader = Callable[[Path], Any]
@@ -87,18 +88,52 @@ class ModelPool:
                     "Call pool.register(slot, loader) first."
                 )
             if not force:
-                guard = preflight(spec.model_id)
+                guard = preflight(spec.model_id, for_acquire=True)
                 if not guard.ok:
                     raise PreflightBlocked(guard)
             loader, _unloader, ram_override = loader_entry
             ram_mb = float(ram_override if ram_override is not None else spec.ram_mb)
             self._evict_for(ram_mb)
+            try:
+                take_lease(
+                    spec.slot,
+                    ram_mb=ram_mb,
+                    model_id=spec.model_id,
+                    force=force,
+                    cache_dir=self.cache_dir,
+                )
+            except ModelInUse as occupied:
+                if not force:
+                    from .preflight import PreflightResult
+
+                    raise PreflightBlocked(
+                        PreflightResult(
+                            ok=False,
+                            ram_fit="fits",
+                            disk_ok=True,
+                            can_force=True,
+                            message=str(occupied),
+                            held_by=occupied.holder.to_dict(),
+                            required_ram_mb=ram_mb,
+                        )
+                    ) from occupied
+                take_lease(
+                    spec.slot,
+                    ram_mb=ram_mb,
+                    model_id=spec.model_id,
+                    force=True,
+                    cache_dir=self.cache_dir,
+                )
             path = (
                 ensure_model(spec.model_id, cache_dir=self.cache_dir, force=True)
                 if download
                 else resolve(spec.model_id, cache_dir=self.cache_dir)
             )
-            instance = loader(path)
+            try:
+                instance = loader(path)
+            except Exception:
+                drop_lease(spec.slot, cache_dir=self.cache_dir)
+                raise
             self._resident[spec.slot] = _Resident(
                 slot=spec.slot,
                 instance=instance,
@@ -187,6 +222,7 @@ class ModelPool:
         entry = self._loaders.get(slot)
         if entry and entry[1] is not None:
             entry[1](item.instance)
+        drop_lease(slot, cache_dir=self.cache_dir)
 
 
 _PROCESS_POOL: ModelPool | None = None
@@ -205,4 +241,7 @@ def process_pool() -> ModelPool:
 def reset_process_pool() -> None:
     global _PROCESS_POOL
     with _PROCESS_LOCK:
+        if _PROCESS_POOL is not None:
+            for slot in list(_PROCESS_POOL._resident):
+                _PROCESS_POOL._drop(slot)
         _PROCESS_POOL = None

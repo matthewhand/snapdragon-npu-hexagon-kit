@@ -77,7 +77,7 @@ def test_acquire_blocks_when_preflight_fails(tmp_path, monkeypatch):
     pool.register("stt", lambda path: "whisper")
     monkeypatch.setattr(
         "hexagon_kit.runtime.preflight",
-        lambda model_id: PreflightResult(
+        lambda model_id, **kwargs: PreflightResult(
             ok=False,
             ram_fit="unsafe",
             disk_ok=True,

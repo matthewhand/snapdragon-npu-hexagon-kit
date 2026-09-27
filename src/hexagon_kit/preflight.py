@@ -8,6 +8,7 @@ variant when the requested model would thrash the pagefile.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,6 +44,8 @@ class PreflightResult:
     required_ram_mb: float = 0
     available_disk_mb: float | None = None
     required_disk_mb: float = 0
+    held_by: dict[str, Any] | None = None
+    peer_ram_mb: float = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +60,8 @@ class PreflightResult:
             "requiredRamMb": self.required_ram_mb,
             "availableDiskMb": self.available_disk_mb,
             "requiredDiskMb": self.required_disk_mb,
+            "heldBy": self.held_by,
+            "peerRamMb": self.peer_ram_mb,
         }
 
 
@@ -87,10 +92,16 @@ def _lighter_suggestion(spec: ModelSpec, memory: MemoryStatus | None) -> tuple[s
     return pick.model_id, pick.name
 
 
-def preflight(model_id_or_slot: str, *, memory: MemoryStatus | None = None) -> PreflightResult:
+def preflight(
+    model_id_or_slot: str,
+    *,
+    memory: MemoryStatus | None = None,
+    for_acquire: bool = False,
+) -> PreflightResult:
     spec = get_spec(model_id_or_slot)
     mem = memory if memory is not None else read_memory_status()
-    cache = active().cache_dir
+    cfg = active()
+    cache = cfg.cache_dir
     cache.mkdir(parents=True, exist_ok=True)
     free_disk_mb = shutil.disk_usage(cache).free / (1024 * 1024)
     need_disk = spec.disk_mb * DISK_SLACK
@@ -98,8 +109,29 @@ def preflight(model_id_or_slot: str, *, memory: MemoryStatus | None = None) -> P
     fit = _ram_fit(spec.ram_mb, mem)
     suggest_id, suggest_name = _lighter_suggestion(spec, mem)
 
+    from .leases import holder_for, peer_ram_mb
+
+    held = holder_for(spec.slot, cache)
+    held_by = None
+    if held is not None and held.pid != os.getpid():
+        held_by = held.to_dict()
+    peers = peer_ram_mb(cache)
+    budget = float(cfg.max_ram_mb)
+    over_budget = for_acquire and (peers + spec.ram_mb) > budget
+    exclusive = for_acquire and held_by is not None
+
     available_mb = mem.available_mb if mem else None
-    if not disk_ok:
+    if exclusive:
+        message = (
+            f"{spec.name} is already loaded in {held.exe} (pid {held.pid}). "
+            "Pass force=True to load a second copy."
+        )
+    elif over_budget:
+        message = (
+            f"{spec.name} needs ~{spec.ram_mb:.0f} MB but peers already hold "
+            f"{peers:.0f} MB of the {budget:.0f} MB machine NPU budget."
+        )
+    elif not disk_ok:
         message = (
             f"{spec.name} needs ~{spec.disk_mb:.0f} MB on disk "
             f"but only {free_disk_mb:.0f} MB is free."
@@ -123,17 +155,20 @@ def preflight(model_id_or_slot: str, *, memory: MemoryStatus | None = None) -> P
     else:
         message = f"{spec.name} fits current RAM and disk."
 
-    ok = disk_ok and fit == "fits"
+    ok = disk_ok and fit == "fits" and not exclusive and not over_budget
+    can_force = (not ok) and (exclusive or over_budget or fit != "fits" or not disk_ok)
     return PreflightResult(
         ok=ok,
         ram_fit=fit,
         disk_ok=disk_ok,
-        can_force=fit != "fits" or not disk_ok,
+        can_force=can_force,
         message=message,
-        suggest_id=suggest_id,
-        suggest_name=suggest_name,
+        suggest_id=suggest_id if not exclusive else None,
+        suggest_name=suggest_name if not exclusive else None,
         available_ram_mb=available_mb,
         required_ram_mb=spec.ram_mb,
         available_disk_mb=round(free_disk_mb, 1),
         required_disk_mb=round(need_disk, 1),
+        held_by=held_by,
+        peer_ram_mb=peers,
     )

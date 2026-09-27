@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snapdragon-npu-hexagon-kit"
-version = "0.1.0"
+version = "0.3.0"
 description = "Shared Hexagon NPU model cache, catalog, and preflight for first-generation Copilot+ PCs."
 readme = "README.md"
 license = { text = "MIT" }
@@ -27,7 +27,16 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+# CPU-only / CPU-oriented upstream ORT. Does not provide Qualcomm Hexagon QNN.
+# On many machines this wheel lists only CPUExecutionProvider.
 ort = ["onnxruntime>=1.20"]
+# Qualcomm Hexagon QNN EP (Windows ARM64 Copilot+). Different package from [ort].
+# True Hexagon listing needs this so QNNExecutionProvider appears.
+qnn = ["onnxruntime_qnn"]
+hub = ["qai_hub_models_cli>=0.50", "huggingface_hub>=0.23"]
+hf = ["huggingface_hub>=0.23"]
+apps = ["qai-hub-apps"]
+sdk = ["qai-hub"]
 dev = ["pytest>=8", "build>=1.2"]
 
 [project.scripts]
@@ -51,3 +60,6 @@ hexagon_kit = ["py.typed"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "npu: requires a live Hexagon / QNNExecutionProvider; skipped on Linux CI",
+]
