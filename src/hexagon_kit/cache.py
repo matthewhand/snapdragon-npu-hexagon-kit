@@ -17,7 +17,7 @@ from .catalog import Artifact, ModelSpec
 from .config import get_spec
 from .credentials import hf_token
 from .hf import hf_hub_file, link_or_copy
-from .leases import ModelInUse, holder_for
+from .leases import ModelInUse, holder_for, pid_alive
 from .lock import FileLock
 from .preflight import PreflightBlocked, preflight
 
@@ -30,6 +30,7 @@ __all__ = [
     "download_model",
     "ensure_model",
     "is_installed",
+    "peer_download",
     "resolve",
     "slot_dir",
 ]
@@ -133,6 +134,56 @@ def delete_model(model_id_or_slot: str, cache_dir: Path | None = None) -> None:
     shutil.rmtree(dest)
 
 
+def _staging_dirs(spec: ModelSpec, cache_dir: Path | None = None) -> list[tuple[int, Path]]:
+    parent = slot_dir(spec, cache_dir).parent
+    prefix = f".{spec.slot}-staging-"
+    found: list[tuple[int, Path]] = []
+    if not parent.is_dir():
+        return found
+    for child in parent.iterdir():
+        if not child.is_dir() or not child.name.startswith(prefix):
+            continue
+        try:
+            pid = int(child.name[len(prefix):])
+        except ValueError:
+            continue
+        found.append((pid, child))
+    return found
+
+
+def _reap_stale_staging(spec: ModelSpec, cache_dir: Path | None = None) -> None:
+    """Remove staging dirs left by crashed or killed processes. Caller holds the slot lock."""
+    for pid, path in _staging_dirs(spec, cache_dir):
+        if pid != os.getpid() and not pid_alive(pid):
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def peer_download(model_id_or_slot: str, cache_dir: Path | None = None) -> dict | None:
+    """
+    Another live process is downloading this slot into the shared cache.
+
+    Returns ``{"pid", "bytes", "estimatedPct", "stagingDir"}`` or None. ``bytes``
+    counts what has landed in staging so far; ``estimatedPct`` compares that
+    with the catalog ``disk_mb`` and stays below 100 until publish.
+    """
+    spec = get_spec(model_id_or_slot)
+    me = os.getpid()
+    for pid, path in _staging_dirs(spec, cache_dir):
+        if pid == me or not pid_alive(pid):
+            continue
+        size = 0
+        for item in path.rglob("*"):
+            try:
+                if item.is_file():
+                    size += item.stat().st_size
+            except OSError:
+                continue
+        expected = spec.disk_mb * 1024 * 1024
+        pct = min(99, int(size * 100 / expected)) if expected > 0 else 0
+        return {"pid": pid, "bytes": size, "estimatedPct": pct, "stagingDir": str(path)}
+    return None
+
+
 def _publish_slot(staging: Path, dest: Path) -> None:
     parent = dest.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -165,6 +216,7 @@ def download_model(
         with _slot_lock(spec, cache_dir):
             if is_installed(spec.model_id, cache_dir):
                 return dest
+            _reap_stale_staging(spec, cache_dir)
             staging = dest.parent / f".{spec.slot}-staging-{os.getpid()}"
             if staging.exists():
                 shutil.rmtree(staging)
@@ -187,7 +239,8 @@ def download_model(
                 shutil.rmtree(fetch_dir, ignore_errors=True)
                 _mark_complete(staging)
                 _publish_slot(staging, dest)
-            except Exception:
+            except BaseException:
+                # BaseException: Ctrl+C and cancel must not strand a staging dir.
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
     return dest

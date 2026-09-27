@@ -7,6 +7,8 @@ leases. The heavy ``qai_hub_models`` torch SDK is never imported here.
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
 import json
 import os
 import shutil
@@ -144,13 +146,23 @@ def hub_available() -> bool:
 
 
 def _module_status(name: str, install: str) -> dict[str, Any]:
+    # find_spec + metadata, not import: ui_snapshot polls this and qai_hub_models pulls torch.
     try:
-        mod = __import__(name)
-    except ImportError:
+        found = importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        found = False
+    if not found:
         return {"available": False, "install": install}
+    version = None
+    for dist in (name, name.replace("_", "-")):
+        try:
+            version = importlib.metadata.version(dist)
+            break
+        except importlib.metadata.PackageNotFoundError:
+            continue
     return {
         "available": True,
-        "version": getattr(mod, "__version__", None),
+        "version": version,
         "module": name,
     }
 
@@ -531,7 +543,7 @@ def _fetch_hf_repo(repo: str, cache_dir: Path | None = None) -> Path:
                     archive.unlink(missing_ok=True)
                 _mark_complete(staging)
                 _publish_slot(staging, dest)
-            except Exception:
+            except BaseException:
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
     return dest
@@ -592,7 +604,7 @@ def fetch_hub_model(
                             shutil.copy2(result, target)
                 _mark_complete(staging)
                 _publish_slot(staging, dest)
-            except Exception:
+            except BaseException:
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
     return dest
