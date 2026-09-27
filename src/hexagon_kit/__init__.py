@@ -26,6 +26,16 @@ from .hub import (
     list_hub_models,
     vendor_status,
 )
+from .settings import (
+    KIT_SETTINGS,
+    SETTINGS_SCHEMA_VERSION,
+    SettingField,
+    SettingsError,
+    save_settings,
+    settings_snapshot,
+    validate_settings,
+    validate_values,
+)
 from .status import (
     SNAPSHOT_SCHEMA_VERSION,
     DownloadCancelled,
@@ -48,6 +58,14 @@ __all__ = [
     "DownloadCancelled",
     "DownloadInProgress",
     "SNAPSHOT_SCHEMA_VERSION",
+    "KIT_SETTINGS",
+    "SETTINGS_SCHEMA_VERSION",
+    "SettingField",
+    "SettingsError",
+    "save_settings",
+    "settings_snapshot",
+    "validate_settings",
+    "validate_values",
     "cancel_download",
     "download_jobs",
     "get_job",

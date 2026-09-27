@@ -25,6 +25,7 @@ from .preflight import preflight
 from .hub import hub_snapshot
 from .leases import Lease, list_leases
 from .runtime import process_pool
+from .settings import settings_snapshot
 from .xdg import default_config_path
 
 SNAPSHOT_SCHEMA_VERSION = 1
@@ -259,6 +260,7 @@ def ui_snapshot() -> dict[str, Any]:
             "preferredProvider": cfg.preferred_provider or hw.preferred_provider,
             "maxRamMb": cfg.max_ram_mb,
         },
+        "settings": settings_snapshot(),
         "slots": slots_summary(leases),
         "models": [_card(spec, leases) for spec in list_specs()],
         "jobs": download_jobs(),
