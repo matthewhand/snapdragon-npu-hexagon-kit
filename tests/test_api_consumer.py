@@ -31,6 +31,7 @@ _CONSUMER_EXPORTS = (
     "provider_chain",
     "resolve",
     "ui_snapshot",
+    "__version__",
 )
 
 
@@ -40,6 +41,7 @@ def test_consumer_exports_are_importable():
     for name in _CONSUMER_EXPORTS:
         assert hasattr(hexagon_kit, name), name
         assert name in hexagon_kit.__all__, name
+    assert hexagon_kit.__version__ == "0.3.0"
 
 
 def test_probe_honesty_fields_exist_for_apps():

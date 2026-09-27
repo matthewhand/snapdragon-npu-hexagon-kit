@@ -85,6 +85,7 @@ __all__ = [
     "xdg_cache_home",
     "xdg_config_home",
     "xdg_data_home",
+    "__version__",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

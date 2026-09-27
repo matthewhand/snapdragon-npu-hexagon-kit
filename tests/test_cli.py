@@ -1,5 +1,8 @@
 import json
 
+import pytest
+
+import hexagon_kit
 from hexagon_kit.cli import main
 
 
@@ -9,6 +12,15 @@ def test_status_cli(capsys, monkeypatch, tmp_path):
     payload = json.loads(capsys.readouterr().out)
     assert "models" in payload
     assert "storage" in payload
+
+
+def test_cli_version(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert hexagon_kit.__version__ in out
+    assert "0.3.0" in out
 
 
 def test_hw_cli(capsys):

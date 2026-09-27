@@ -32,6 +32,28 @@ def test_app_integration_guide_covers_consumer_contract():
         assert needle in text, needle
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "docs/APP_INTEGRATION.md" in readme
+    assert "docs/INSTALL.md" in readme
+    assert "docs/PUBLISH.md" in readme
+
+
+def test_install_notes_keep_ort_cpu_and_qnn_hexagon_honest():
+    """Consumer install page (publish polish). T13 already owns APP_INTEGRATION."""
+    text = (ROOT / "docs" / "INSTALL.md").read_text(encoding="utf-8")
+    for needle in (
+        "private",
+        "not on PyPI",
+        "[ort]",
+        "[qnn]",
+        "onnxruntime>=1.20",
+        "onnxruntime_qnn",
+        "CPU-only",
+        "QNNExecutionProvider",
+        "never advertise",
+        "APP_INTEGRATION.md",
+        "snapdragon-npu-hexagon-kit-private",
+    ):
+        assert needle in text, needle
+    assert "force-push" in (ROOT / "docs" / "PUBLISH.md").read_text(encoding="utf-8")
 
 
 def test_private_sot_ci_runs_pytest_on_main():
@@ -44,3 +66,7 @@ def test_private_sot_ci_runs_pytest_on_main():
     assert '"3.12"' in raw and '"3.13"' in raw
     assert "python -m pytest" in raw
     assert "not a Hexagon" in raw or "QNNExecutionProvider" in raw
+    assert "scripts/inspect_dist.py" in raw
+    assert "kit-wheel" in raw
+    assert "--target" in raw
+    assert "hexagon_kit.__version__" in raw

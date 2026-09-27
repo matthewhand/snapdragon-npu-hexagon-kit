@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snapdragon-npu-hexagon-kit"
-version = "0.2.0"
+version = "0.3.0"
 description = "Shared Hexagon NPU model cache, catalog, and preflight for first-generation Copilot+ PCs."
 readme = "README.md"
 license = { text = "MIT" }

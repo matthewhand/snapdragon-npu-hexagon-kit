@@ -31,3 +31,11 @@ jobs:
         run: |
           python -m build
           python -c "from pathlib import Path; assert list(Path('dist').glob('*.whl')) and list(Path('dist').glob('*.tar.gz'))"
+      # T13 already runs pytest. Remaining publish gap: the artifacts
+      # themselves must be installable and [ort] must stay CPU-only.
+      - name: Inspect sdist and wheel metadata
+        run: python scripts/inspect_dist.py
+      - name: Install wheel (isolated) and smoke import
+        run: |
+          python -m pip install --target "${RUNNER_TEMP}/kit-wheel" dist/*.whl
+          PYTHONPATH="${RUNNER_TEMP}/kit-wheel" python -c "import hexagon_kit; assert hexagon_kit.__version__ == '0.3.0'; from hexagon_kit import probe_hardware, ensure_model, preflight, resolve; import hexagon_kit.testing as harness; assert callable(harness.detect_hardware) and callable(harness.hexagon_qnn)"

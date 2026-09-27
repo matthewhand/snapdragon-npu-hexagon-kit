@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-09-27
+
+Private SoT **publish candidate**. Not a PyPI upload. Public promote stays
+human-gated. Do not force-push the public mirror from this tag.
+
 - **T5 — EP honesty.** `[ort]` stays CPU-only (`onnxruntime>=1.20`). Hexagon
   QNN is a different extra/package: `[qnn]` → `onnxruntime_qnn`. Docs and
   `hexagon hw` / `probe_hardware()` distinguish QNN vs DirectML vs CPU
@@ -25,6 +30,15 @@
   unless QNN is listed). Tiny fixture catalog + `ensure_fixture` /
   `stub_ensure_resolve` keep Linux CI offline (no multi-GB weights).
   T5 honesty fields unchanged.
+- **Publish polish.** Version `0.3.0` is pinned in `pyproject.toml`,
+  `hexagon_kit.__version__`, and this heading. Consumer
+  [docs/INSTALL.md](docs/INSTALL.md) covers git/tree install and the
+  `[ort]` CPU vs `[qnn]` Hexagon extras. [docs/PUBLISH.md](docs/PUBLISH.md)
+  is the private-only checklist. CI inspects sdist/wheel metadata and
+  smoke-imports the wheel. `[ort]` must not require `onnxruntime_qnn`.
+
+Not in this candidate: PyPI upload, live Hexagon runner, public-mirror
+writes.
 
 ## 0.2.0
 

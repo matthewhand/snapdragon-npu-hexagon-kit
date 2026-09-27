@@ -15,9 +15,16 @@ This is a model cache + hardware probe + preflight library, not an application
 framework. It does not draw widgets, load Whisper/Kokoro engines, or bind a
 network port.
 
-Source: https://github.com/matthewhand/snapdragon-npu-hexagon-kit
+This tree is the **private source of truth**
+(`snapdragon-npu-hexagon-kit-private`). Public name:
+https://github.com/matthewhand/snapdragon-npu-hexagon-kit (human-gated
+promote only — do not force-push that mirror from here).
 
-The package is **not on PyPI**. Install from this tree.
+The package is **not on PyPI** (`import hexagon_kit`, CLI `hexagon`).
+Version **0.3.0** is a private publish candidate. Install notes:
+[docs/INSTALL.md](docs/INSTALL.md) (`[ort]` = CPU `onnxruntime`;
+`[qnn]` = Hexagon `onnxruntime_qnn`). Publish checklist:
+[docs/PUBLISH.md](docs/PUBLISH.md).
 
 **Consumer apps:** follow [docs/APP_INTEGRATION.md](docs/APP_INTEGRATION.md) —
 depend on `hexagon_kit`, call `probe_hardware()` / EP honesty fields,
@@ -26,7 +33,9 @@ advertise Hexagon/QNN** unless `QNNExecutionProvider` is listed. Lane-1
 CI: import `hexagon_kit.testing` (do not invent a fake EP probe; fixture
 catalog stays offline).
 
-TODO: publish `snapdragon-npu-hexagon-kit` to PyPI (`import hexagon_kit`, CLI `hexagon`). Do not upload until a PyPI token is available. GitHub Actions CI runs CPython 3.12/3.13 on `ubuntu-latest`; that is not a Hexagon box. NPU-marked tests skip when QNN is absent.
+GitHub Actions CI runs CPython 3.12/3.13 on `ubuntu-latest`; that is not
+a Hexagon box. NPU-marked tests skip when QNN is absent. Do not upload
+to PyPI until a human has a token and promotes.
 
 ---
 
@@ -54,13 +63,16 @@ need a Hexagon).
 
 ## Install
 
+Full consumer recipe (git pin, extras, wheel): [docs/INSTALL.md](docs/INSTALL.md).
+
 ```powershell
 pip install -e .
 pip install -e ".[dev]"    # pytest
 ```
 
 The `hexagon` script is on PATH after the editable install. Equivalent:
-`python -m hexagon_kit`.
+`python -m hexagon_kit`. `hexagon --version` prints `0.3.0` on this
+candidate.
 
 Optional ONNX Runtime extras — **these are different packages**:
 
