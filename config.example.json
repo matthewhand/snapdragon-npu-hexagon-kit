@@ -1,0 +1,12 @@
+{
+  "cache_dir": null,
+  "max_ram_mb": 3500,
+  "preferred_provider": null,
+  "qnn_htp_dir": null,
+  "models": [
+    {
+      "model_id": "kokoro_int8",
+      "ram_mb": 280
+    }
+  ]
+}
