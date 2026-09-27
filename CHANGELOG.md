@@ -12,6 +12,12 @@
   `rapidocr_ppocrv4_mobile` (small OCR, 200 MB RAM). SHA / `ram_mb` /
   `disk_mb` / `expected_files` set. Preflight gates downloads;
   `hexagon models list` shows both. No 8 GB defaults.
+- **T13 — consumer integration docs + CI.** `docs/APP_INTEGRATION.md`
+  shows how apps depend on `hexagon_kit`, read EP honesty fields,
+  `ensure_model` / `preflight` slots `llm` and `vision`, and never
+  advertise Hexagon/QNN without `QNNExecutionProvider`. Private SoT
+  GitHub Actions runs pytest on PR/push to `main` (Linux; `npu` tests
+  skip without QNN). Public API names stay stable.
 
 ## 0.2.0
 

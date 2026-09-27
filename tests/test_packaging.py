@@ -40,3 +40,6 @@ def test_readme_and_license_ship_with_the_tree():
     assert hexagon_kit.__version__ in changelog
     assert "CHANGELOG.md" in manifest
     assert "config.example.json" in manifest
+    assert "docs" in manifest
+    assert "APP_INTEGRATION" in readme or "docs/APP_INTEGRATION.md" in readme
+    assert "never" in readme.lower() and "QNNExecutionProvider" in readme

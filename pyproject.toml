@@ -60,3 +60,6 @@ hexagon_kit = ["py.typed"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "npu: requires a live Hexagon / QNNExecutionProvider; skipped on Linux CI",
+]

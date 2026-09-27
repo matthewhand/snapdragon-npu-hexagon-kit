@@ -19,7 +19,12 @@ Source: https://github.com/matthewhand/snapdragon-npu-hexagon-kit
 
 The package is **not on PyPI**. Install from this tree.
 
-TODO: publish `snapdragon-npu-hexagon-kit` to PyPI (`import hexagon_kit`, CLI `hexagon`). Do not upload until a PyPI token is available. GitHub Actions CI runs CPython 3.12/3.13 on `ubuntu-latest`; that is not a Hexagon box.
+**Consumer apps:** follow [docs/APP_INTEGRATION.md](docs/APP_INTEGRATION.md) —
+depend on `hexagon_kit`, call `probe_hardware()` / EP honesty fields,
+`ensure_model` / `preflight` for slots `llm` and `vision`, and **never
+advertise Hexagon/QNN** unless `QNNExecutionProvider` is listed.
+
+TODO: publish `snapdragon-npu-hexagon-kit` to PyPI (`import hexagon_kit`, CLI `hexagon`). Do not upload until a PyPI token is available. GitHub Actions CI runs CPython 3.12/3.13 on `ubuntu-latest`; that is not a Hexagon box. NPU-marked tests skip when QNN is absent.
 
 ---
 
@@ -286,8 +291,9 @@ The optional `[ort]` extra is CPU-oriented; Hexagon QNN needs
 `onnxruntime_qnn` so the chain can include `QNNExecutionProvider`. It is not
 a sherpa Whisper or Kokoro wrapper.
 
-Apps should call `resolve("stt")` / `resolve("tts")` instead of hardcoding
-`C:\tmp\npu_pipeline\models`.
+Apps should call `resolve("stt")` / `resolve("tts")` / `resolve("llm")` /
+`resolve("vision")` instead of hardcoding `C:\tmp\npu_pipeline\models`.
+See [docs/APP_INTEGRATION.md](docs/APP_INTEGRATION.md).
 
 ---
 

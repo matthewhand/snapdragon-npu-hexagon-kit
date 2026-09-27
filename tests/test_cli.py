@@ -16,6 +16,11 @@ def test_hw_cli(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert "preferred_provider" in payload
     assert "is_snapdragon" in payload
+    assert payload["ep_kind"] in {"qnn", "directml", "cpu"}
+    assert "qnn_package" in payload
+    assert "ort_package" in payload
+    if payload["ep_kind"] != "qnn":
+        assert "QNNExecutionProvider" not in payload.get("providers", [])
 
 
 def test_config_show_cli(capsys, monkeypatch, tmp_path):
