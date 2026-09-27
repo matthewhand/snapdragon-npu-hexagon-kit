@@ -70,18 +70,30 @@ def cmd_config_show(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _artifact_origin(url: str) -> str:
+    host = url.split("://", 1)[-1].split("/", 1)[0].lower()
+    if host.endswith("github.com"):
+        return "github"
+    if host.endswith("huggingface.co"):
+        return "huggingface"
+    return host or "unknown"
+
+
 def _builtin_rows() -> list[dict]:
     rows = []
     for spec in list_specs():
+        urls = [art.url for art in spec.artifacts]
         rows.append(
             {
                 "id": spec.model_id,
                 "slot": spec.slot,
                 "name": spec.name,
                 "source": "builtin",
-                "origin": "github",
-                "urls": [art.url for art in spec.artifacts],
+                "origin": _artifact_origin(urls[0]) if urls else "unknown",
+                "urls": urls,
                 "disk_mb": spec.disk_mb,
+                "ram_mb": spec.ram_mb,
+                "expected_files": list(spec.expected_files),
                 "installed": is_installed(spec.model_id),
             }
         )
@@ -315,7 +327,10 @@ def build_parser() -> argparse.ArgumentParser:
     hub_del.set_defaults(func=cmd_hub_delete)
 
     dl = models_sub.add_parser("download", help="Download a catalog model into the shared cache")
-    dl.add_argument("model", help="Model id or slot (stt, tts, whisper_tiny_int8, kokoro_int8)")
+    dl.add_argument(
+        "model",
+        help="Model id or slot (stt, tts, llm, vision, whisper_tiny_int8, …)",
+    )
     dl.add_argument("--async", dest="async_job", action="store_true", help="Start a background download and print job JSON")
     dl.add_argument("--force", action="store_true", help="Bypass RAM/disk preflight (may thrash this 16 GB PC)")
     dl.set_defaults(func=cmd_models_download)

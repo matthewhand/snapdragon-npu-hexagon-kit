@@ -7,6 +7,11 @@
   `hexagon hw` / `probe_hardware()` distinguish QNN vs DirectML vs CPU
   (`ep_kind`, `ort_package`, `qnn_package`) without changing existing
   caller fields.
+- **T6 — catalog slots `llm` + `vision`.** Kit-owned Copilot+ pins:
+  `smollm2_135m_int8` (SmolLM-class INT8, 400 MB RAM) and
+  `rapidocr_ppocrv4_mobile` (small OCR, 200 MB RAM). SHA / `ram_mb` /
+  `disk_mb` / `expected_files` set. Preflight gates downloads;
+  `hexagon models list` shows both. No 8 GB defaults.
 
 ## 0.2.0
 
@@ -40,4 +45,4 @@ First tagged library slice for first-generation Copilot+ PCs (16 GB RAM, Hexagon
 - CI builds an sdist/wheel after pytest so a missing `tests/` tree fails the job.
 - sdist includes CHANGELOG and `config.example.json`.
 
-Not in this release: PyPI upload, Hexagon QNN wheel, Gemma/LLM/vision catalog entries, a cross-app NPU daemon.
+Not in this release: PyPI upload, Hexagon QNN wheel, a cross-app NPU daemon.

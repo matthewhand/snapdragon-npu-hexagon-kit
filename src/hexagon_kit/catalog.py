@@ -106,6 +106,90 @@ CATALOG: tuple[ModelSpec, ...] = (
             HfFile("leonelhs/kokoro-thewh1teagle", "voices-v1.0.bin", "voices-v1.0.bin"),
         ),
     ),
+    ModelSpec(
+        model_id="smollm2_135m_int8",
+        slot="llm",
+        name="SmolLM2 135M Instruct INT8",
+        description=(
+            "SmolLM-class on-device chat for first-gen 16 GB Snapdragon X. "
+            "INT8 ONNX (~135M). Not an 8 GB default."
+        ),
+        disk_mb=140,  # onnx ~131 MB + tokenizer.json ~2 MB
+        ram_mb=400,
+        artifacts=(
+            Artifact(
+                url="https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/onnx/model_int8.onnx",
+                filename="model_int8.onnx",
+                kind="file",
+                sha256="a7c33f9ef85d06734cc9d1f943f7e2ba57c77e769df727f4d3e217d9f672b0cc",
+            ),
+            Artifact(
+                url="https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/tokenizer.json",
+                filename="tokenizer.json",
+                kind="file",
+                sha256="9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+            ),
+        ),
+        expected_files=(
+            "model_int8.onnx",
+            "tokenizer.json",
+        ),
+        hf_files=(
+            HfFile(
+                "HuggingFaceTB/SmolLM2-135M-Instruct",
+                "onnx/model_int8.onnx",
+                "model_int8.onnx",
+            ),
+            HfFile(
+                "HuggingFaceTB/SmolLM2-135M-Instruct",
+                "tokenizer.json",
+                "tokenizer.json",
+            ),
+        ),
+        notes="Kit-owned llm slot. Apps supply the loader; this package does not run inference.",
+    ),
+    ModelSpec(
+        model_id="rapidocr_ppocrv4_mobile",
+        slot="vision",
+        name="RapidOCR PP-OCRv4 mobile",
+        description=(
+            "Small OCR (det + rec) for first-gen 16 GB Snapdragon X. "
+            "Mobile-scale ONNX, not a server or 8 GB vision stack."
+        ),
+        disk_mb=20,  # det ~4.5 MB + rec ~10.4 MB
+        ram_mb=200,
+        artifacts=(
+            Artifact(
+                url="https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+                filename="ch_PP-OCRv4_det_infer.onnx",
+                kind="file",
+                sha256="d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+            ),
+            Artifact(
+                url="https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
+                filename="ch_PP-OCRv4_rec_infer.onnx",
+                kind="file",
+                sha256="48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b",
+            ),
+        ),
+        expected_files=(
+            "ch_PP-OCRv4_det_infer.onnx",
+            "ch_PP-OCRv4_rec_infer.onnx",
+        ),
+        hf_files=(
+            HfFile(
+                "SWHL/RapidOCR",
+                "PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+                "ch_PP-OCRv4_det_infer.onnx",
+            ),
+            HfFile(
+                "SWHL/RapidOCR",
+                "PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
+                "ch_PP-OCRv4_rec_infer.onnx",
+            ),
+        ),
+        notes="Kit-owned vision slot. Apps supply the OCR runner.",
+    ),
 )
 
 

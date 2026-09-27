@@ -99,6 +99,20 @@ def test_suggests_lighter_same_slot(monkeypatch, tmp_path):
         reset_config()
 
 
+def test_preflight_llm_and_vision_shape(monkeypatch, tmp_path):
+    monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
+    reset_config()
+    for slot in ("llm", "vision"):
+        result = preflight(slot)
+        payload = result.to_dict()
+        assert payload["ramFit"] in {"fits", "tight", "unsafe"}
+        assert "ok" in payload
+        assert "canForce" in payload
+        assert payload["requiredRamMb"] < 1024
+        assert payload["requiredDiskMb"] > 0
+        assert result.required_ram_mb < 8192
+
+
 def test_download_model_blocks_without_force(monkeypatch, tmp_path):
     monkeypatch.setenv("HEXAGON_KIT_CACHE", str(tmp_path))
     reset_config()

@@ -323,6 +323,13 @@ def test_models_list_builtin_still_default(capsys, monkeypatch, tmp_path):
     assert main(["models", "list"]) == 0
     rows = json.loads(capsys.readouterr().out)
     ids = {row["id"] for row in rows}
-    assert ids == {"whisper_tiny_int8", "kokoro_int8"}
+    assert {
+        "whisper_tiny_int8",
+        "kokoro_int8",
+        "smollm2_135m_int8",
+        "rapidocr_ppocrv4_mobile",
+    } <= ids
     assert all(row.get("source") == "builtin" for row in rows)
-    assert all(row.get("origin") == "github" for row in rows)
+    origins = {row["id"]: row.get("origin") for row in rows}
+    assert origins["whisper_tiny_int8"] == "github"
+    assert origins["smollm2_135m_int8"] == "huggingface"

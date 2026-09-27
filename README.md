@@ -212,8 +212,12 @@ hexagon models cache
 hexagon models list
 hexagon models download whisper_tiny_int8
 hexagon models download kokoro_int8
+hexagon models download llm
+hexagon models download vision
 hexagon models path stt
 hexagon models path tts
+hexagon models path llm
+hexagon models path vision
 hexagon models delete whisper_tiny_int8
 hexagon hub status
 hexagon hub list --domain Audio
@@ -306,8 +310,8 @@ Apps should call `resolve("stt")` / `resolve("tts")` instead of hardcoding
 `resolve` does not.
 
 A 4 GB LLM added via config overlay is refused on a 16 GB box with ~2 GB free
-unless the caller passes `force=True`. The builtin catalog does not include
-Gemma / LLM / vision.
+unless the caller passes `force=True`. Builtin `llm` / `vision` stay
+SmolLM-class / small OCR (`ram_mb` well under 1 GB), not 8 GB defaults.
 
 ---
 
@@ -331,14 +335,22 @@ second app is blocked (or must Force) and delete cannot yank files in use.
 
 ## Builtin catalog
 
-| Slot | Id | Artifacts |
-|---|---|---|
-| `stt` | `whisper_tiny_int8` | sherpa-onnx Whisper Tiny EN INT8 (encoder + decoder + tokens), unpacked from the upstream `.tar.bz2` |
-| `tts` | `kokoro_int8` | `kokoro-v1.0.int8.onnx` + `voices-v1.0.bin` |
+The kit owns these slots. Each entry pins `sha256`, `ram_mb`, `disk_mb`, and
+`expected_files`. `hexagon models list` shows them; `hexagon preflight` /
+`ensure_model` gate downloads.
 
-Each entry has `slot`, `ram_mb`, `disk_mb`, and `expected_files`. Preflight and
-`ui_snapshot` use those fields. Add further models through `models[]` in config
-(or a future catalog slice) when a second app actually loads the same files.
+| Slot | Id | Artifacts | ~RAM |
+|---|---|---|---|
+| `stt` | `whisper_tiny_int8` | sherpa-onnx Whisper Tiny EN INT8 (encoder + decoder + tokens), unpacked from the upstream `.tar.bz2` | 150 MB |
+| `tts` | `kokoro_int8` | `kokoro-v1.0.int8.onnx` + `voices-v1.0.bin` | 250 MB |
+| `llm` | `smollm2_135m_int8` | SmolLM2 135M Instruct INT8 ONNX + `tokenizer.json` | 400 MB |
+| `vision` | `rapidocr_ppocrv4_mobile` | RapidOCR PP-OCRv4 mobile det + rec ONNX | 200 MB |
+
+`llm` / `vision` are first-gen 16 GB Copilot+ sized (SmolLM-class / small OCR).
+There is no 8 GB default. Preflight and `ui_snapshot` use those fields. Add
+further models through `models[]` in config when a second app actually loads
+the same files. Overlaying a new `model_id` on slot `llm` does not replace
+the builtin slot lookup; `get_spec("llm")` still returns the kit pin.
 
 ---
 
