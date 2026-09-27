@@ -1,6 +1,6 @@
 """Hexagon NPU kit: hardware probe, model catalog, shared XDG cache, and residency pool."""
 
-from .cache import ModelNotInstalled, ensure_model, is_installed, resolve
+from .cache import ModelNotInstalled, ensure_model, is_installed, peer_download, resolve
 from .leases import Lease, ModelInUse, holder_for, list_leases, take_lease, drop_lease
 from .catalog import CATALOG, ModelSpec
 from .config import KitConfig, active, get_spec, list_specs, load_config, reset_config
@@ -26,11 +26,34 @@ from .hub import (
     list_hub_models,
     vendor_status,
 )
-from .status import delete_cached, model_card, start_download, storage_report, ui_snapshot
+from .status import (
+    SNAPSHOT_SCHEMA_VERSION,
+    DownloadCancelled,
+    DownloadInProgress,
+    cancel_download,
+    delete_cached,
+    download_jobs,
+    get_job,
+    model_card,
+    slot_info,
+    slots_summary,
+    start_download,
+    storage_report,
+    ui_snapshot,
+)
 from .xdg import default_cache_dir, default_config_path, xdg_cache_home, xdg_config_home, xdg_data_home
 
 __all__ = [
     "CATALOG",
+    "DownloadCancelled",
+    "DownloadInProgress",
+    "SNAPSHOT_SCHEMA_VERSION",
+    "cancel_download",
+    "download_jobs",
+    "get_job",
+    "peer_download",
+    "slot_info",
+    "slots_summary",
     "HardwareProbe",
     "HubUnavailable",
     "ProviderChoice",
